@@ -31,6 +31,7 @@
 #include "sensor_msgs/msg/image.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/u_int32.hpp"
+#include "cuda_bb_benchmark/system_monitor.hpp"
 
 namespace cuda_bb_benchmark
 {
@@ -91,6 +92,9 @@ private:
   std::chrono::steady_clock::time_point sub_last_recv_time_{};
   int64_t pub_first_stamp_ns_{0};
   int64_t pub_last_stamp_ns_{0};
+
+  // System resource monitor
+  SystemMonitor sys_monitor_;
 };
 
 }  // namespace cuda_bb_benchmark

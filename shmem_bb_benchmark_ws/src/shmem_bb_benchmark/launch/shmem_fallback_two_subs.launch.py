@@ -142,6 +142,26 @@ def merge_and_print_csv_results(*args, **kwargs):
     shmem_outliers = shmem_data.get('outliers_3sigma_count', '0') if shmem_data else '0'
     fallback_outliers = fallback_data.get('outliers_3sigma_count', '0') if fallback_data else '0'
 
+    shmem_cpu_mean = shmem_data.get('cpu_util_mean_pct', 'N/A') if shmem_data else 'N/A'
+    shmem_cpu_max = shmem_data.get('cpu_util_max_pct', 'N/A') if shmem_data else 'N/A'
+    fallback_cpu_mean = fallback_data.get('cpu_util_mean_pct', 'N/A') if fallback_data else 'N/A'
+    fallback_cpu_max = fallback_data.get('cpu_util_max_pct', 'N/A') if fallback_data else 'N/A'
+
+    shmem_rss_mean = shmem_data.get('process_rss_mean_mb', 'N/A') if shmem_data else 'N/A'
+    shmem_rss_peak = shmem_data.get('process_rss_peak_mb', 'N/A') if shmem_data else 'N/A'
+    fallback_rss_mean = fallback_data.get('process_rss_mean_mb', 'N/A') if fallback_data else 'N/A'
+    fallback_rss_peak = fallback_data.get('process_rss_peak_mb', 'N/A') if fallback_data else 'N/A'
+
+    shmem_clock_mean = shmem_data.get('cpu_clock_mean_mhz', 'N/A') if shmem_data else 'N/A'
+    shmem_clock_max = shmem_data.get('cpu_clock_max_mhz', 'N/A') if shmem_data else 'N/A'
+    fallback_clock_mean = fallback_data.get('cpu_clock_mean_mhz', 'N/A') if fallback_data else 'N/A'
+    fallback_clock_max = fallback_data.get('cpu_clock_max_mhz', 'N/A') if fallback_data else 'N/A'
+
+    shmem_power_mean = shmem_data.get('power_mean_w', 'N/A') if shmem_data else 'N/A'
+    shmem_power_max = shmem_data.get('power_max_w', 'N/A') if shmem_data else 'N/A'
+    fallback_power_mean = fallback_data.get('power_mean_w', 'N/A') if fallback_data else 'N/A'
+    fallback_power_max = fallback_data.get('power_max_w', 'N/A') if fallback_data else 'N/A'
+
     def calc_speedup(fb_str, shm_str):
         try:
             fb = float(fb_str)
@@ -169,6 +189,11 @@ def merge_and_print_csv_results(*args, **kwargs):
         'shmem_max_ms', 'fallback_max_ms',
         'shmem_std_ms', 'fallback_std_ms',
         'shmem_outliers', 'fallback_outliers',
+        'shmem_cpu_mean_pct', 'fallback_cpu_mean_pct',
+        'shmem_cpu_max_pct', 'fallback_cpu_max_pct',
+        'shmem_rss_peak_mb', 'fallback_rss_peak_mb',
+        'shmem_clock_mean_mhz', 'fallback_clock_mean_mhz',
+        'shmem_power_mean_w', 'fallback_power_mean_w',
     ]
 
     merged_row = [
@@ -184,6 +209,11 @@ def merge_and_print_csv_results(*args, **kwargs):
         str(shmem_max), str(fallback_max),
         str(shmem_std), str(fallback_std),
         str(shmem_outliers), str(fallback_outliers),
+        str(shmem_cpu_mean), str(fallback_cpu_mean),
+        str(shmem_cpu_max), str(fallback_cpu_max),
+        str(shmem_rss_peak), str(fallback_rss_peak),
+        str(shmem_clock_mean), str(fallback_clock_mean),
+        str(shmem_power_mean), str(fallback_power_mean),
     ]
 
     file_exists = os.path.exists(csv_file) and os.path.getsize(csv_file) > 0
@@ -225,6 +255,11 @@ def merge_and_print_csv_results(*args, **kwargs):
     print(f" {'Max Latency':<26} | {shmem_max + ' ms':<22} | {fallback_max + ' ms':<22} |")
     print(f" {'Std Dev (Jitter)':<26} | {shmem_std + ' ms':<22} | {fallback_std + ' ms':<22} |")
     print(f" {'Outliers (> 3-sigma)':<26} | {shmem_outliers:<22} | {fallback_outliers:<22} |")
+    print('-' * 105)
+    print(f" {'System CPU Util (Mean/Max)':<26} | {f'{shmem_cpu_mean}% / {shmem_cpu_max}%':<22} | {f'{fallback_cpu_mean}% / {fallback_cpu_max}%':<22} |")
+    print(f" {'Process RSS (Peak)':<26} | {f'{shmem_rss_peak} MB':<22} | {f'{fallback_rss_peak} MB':<22} |")
+    print(f" {'CPU Clock (Mean/Max)':<26} | {f'{shmem_clock_mean} / {shmem_clock_max} MHz':<22} | {f'{fallback_clock_mean} / {fallback_clock_max} MHz':<22} |")
+    print(f" {'Power Draw (Mean/Max)':<26} | {f'{shmem_power_mean} / {shmem_power_max} W':<22} | {f'{fallback_power_mean} / {fallback_power_max} W':<22} |")
     print('=' * 105)
     print(f' Results saved to: {csv_file}\n')
 

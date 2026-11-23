@@ -53,7 +53,10 @@ def init_csv_file(context):
                     'backend,size_bytes,resolution,target_hz,actual_pub_hz,actual_recv_hz,'
                     'total_sent,received_frames,lost_frames,loss_pct,mean_latency_ms,'
                     'min_latency_ms,p50_latency_ms,p95_latency_ms,p99_latency_ms,max_latency_ms,'
-                    'std_dev_ms,outliers_3sigma_count\n')
+                    'std_dev_ms,outliers_3sigma_count,'
+                    'cpu_util_mean_pct,cpu_util_max_pct,process_rss_mean_mb,process_rss_peak_mb,'
+                    'system_ram_mb,cpu_clock_mean_mhz,cpu_clock_max_mhz,power_mean_w,power_max_w,'
+                    'gpu_util_pct,gpu_clock_mhz,gpu_power_w\n')
         except OSError:
             pass
 
@@ -93,6 +96,18 @@ def print_csv_results(*args, **kwargs):
                 print(f" {'Max Latency':<26} | {r.get('max_latency_ms','')} ms")
                 print(f" {'Std Dev (Jitter)':<26} | {r.get('std_dev_ms','')} ms")
                 print(f" {'Outliers (> 3-sigma)':<26} | {r.get('outliers_3sigma_count','')} frames")
+                print('-' * 105)
+                cpu_mean = r.get('cpu_util_mean_pct', 'N/A')
+                cpu_max = r.get('cpu_util_max_pct', 'N/A')
+                rss_peak = r.get('process_rss_peak_mb', 'N/A')
+                sys_ram = r.get('system_ram_mb', 'N/A')
+                clock_mean = r.get('cpu_clock_mean_mhz', 'N/A')
+                power_mean = r.get('power_mean_w', 'N/A')
+                power_max = r.get('power_max_w', 'N/A')
+                print(f" {'System CPU Util':<26} | Mean: {cpu_mean}% | Max: {cpu_max}%")
+                print(f" {'RAM (Process / System)':<26} | Peak RSS: {rss_peak} MB | System Used: {sys_ram} MB")
+                print(f" {'CPU Clock (Mean)':<26} | {clock_mean} MHz")
+                print(f" {'Power Draw':<26} | Mean: {power_mean} W | Max: {power_max} W")
                 print('=' * 105)
                 print(f' Results saved to: {csv_file}\n')
         except OSError:

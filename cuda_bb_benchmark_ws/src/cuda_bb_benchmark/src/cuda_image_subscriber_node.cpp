@@ -116,6 +116,7 @@ CudaImageSubscriberNode::CudaImageSubscriberNode(const rclcpp::NodeOptions & opt
 
 CudaImageSubscriberNode::~CudaImageSubscriberNode()
 {
+  sys_monitor_.stop();
   if (!summary_written_ && !latencies_ms_.empty() && !summary_csv_path_.empty()) {
     write_summary_report(last_backend_, last_width_, last_height_);
   }
@@ -252,6 +253,7 @@ void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShare
       first_bench_seq_ = seq;
       sub_first_recv_time_ = steady_now;
       pub_first_stamp_ns_ = pub_steady_ns;
+      sys_monitor_.start();
     }
     last_bench_seq_ = seq;
     sub_last_recv_time_ = steady_now;
@@ -320,6 +322,8 @@ void CudaImageSubscriberNode::write_summary_report(
     return;
   }
   summary_written_ = true;
+  sys_monitor_.stop();
+  const auto sys_summary = sys_monitor_.get_summary();
 
   auto samples = latencies_ms_;
   std::sort(samples.begin(), samples.end());
@@ -397,6 +401,23 @@ void CudaImageSubscriberNode::write_summary_report(
     mean_ms, min_ms, max_ms, std_dev_ms);
   RCLCPP_INFO(get_logger(), " Outliers:    %zu frame(s) exceeded 3-sigma (%.3f ms) [Max outlier: %.3f ms]",
     outlier_count, outlier_threshold_ms, max_ms);
+  RCLCPP_INFO(get_logger(), " System Resources:");
+  RCLCPP_INFO(get_logger(), "   CPU Util:    Mean: %.1f%% | Max: %.1f%%",
+    sys_summary.cpu_util_mean_pct, sys_summary.cpu_util_max_pct);
+  RCLCPP_INFO(get_logger(), "   RAM Usage:   Process RSS: %.1f MB (Peak: %.1f MB) | System Used: %.1f MB",
+    sys_summary.process_rss_mean_mb, sys_summary.process_rss_peak_mb, sys_summary.system_ram_mean_mb);
+  RCLCPP_INFO(get_logger(), "   CPU Clock:   Mean: %.0f MHz | Max: %.0f MHz",
+    sys_summary.cpu_clock_mean_mhz, sys_summary.cpu_clock_max_mhz);
+  if (sys_summary.power_available) {
+    RCLCPP_INFO(get_logger(), "   Power Draw:  Mean: %.2f W | Max: %.2f W",
+      sys_summary.power_mean_watts, sys_summary.power_max_watts);
+  } else {
+    RCLCPP_INFO(get_logger(), "   Power Draw:  N/A (no readable power sensor)");
+  }
+  if (sys_summary.gpu_available) {
+    RCLCPP_INFO(get_logger(), "   GPU Util:    Mean: %.1f%% | Clock: %.0f MHz | Power: %.2f W",
+      sys_summary.gpu_util_mean_pct, sys_summary.gpu_clock_mean_mhz, sys_summary.gpu_power_mean_watts);
+  }
   RCLCPP_INFO(get_logger(), "==========================================================================");
 
   if (!summary_csv_path_.empty()) {
@@ -410,7 +431,10 @@ void CudaImageSubscriberNode::write_summary_report(
         csv << "backend,size_bytes,resolution,target_hz,actual_pub_hz,actual_recv_hz,"
             << "total_sent,received_frames,lost_frames,loss_pct,mean_latency_ms,"
             << "min_latency_ms,p50_latency_ms,p95_latency_ms,p99_latency_ms,max_latency_ms,"
-            << "std_dev_ms,outliers_3sigma_count\n";
+            << "std_dev_ms,outliers_3sigma_count,"
+            << "cpu_util_mean_pct,cpu_util_max_pct,process_rss_mean_mb,process_rss_peak_mb,"
+            << "system_ram_mb,cpu_clock_mean_mhz,cpu_clock_max_mhz,power_mean_w,power_max_w,"
+            << "gpu_util_pct,gpu_clock_mhz,gpu_power_w\n";
       }
       csv << backend << ","
           << size_bytes << ","
@@ -429,7 +453,19 @@ void CudaImageSubscriberNode::write_summary_report(
           << std::fixed << std::setprecision(3) << p99_ms << ","
           << std::fixed << std::setprecision(3) << max_ms << ","
           << std::fixed << std::setprecision(3) << std_dev_ms << ","
-          << outlier_count << "\n";
+          << outlier_count << ","
+          << std::fixed << std::setprecision(1) << sys_summary.cpu_util_mean_pct << ","
+          << std::fixed << std::setprecision(1) << sys_summary.cpu_util_max_pct << ","
+          << std::fixed << std::setprecision(1) << sys_summary.process_rss_mean_mb << ","
+          << std::fixed << std::setprecision(1) << sys_summary.process_rss_peak_mb << ","
+          << std::fixed << std::setprecision(1) << sys_summary.system_ram_mean_mb << ","
+          << std::fixed << std::setprecision(0) << sys_summary.cpu_clock_mean_mhz << ","
+          << std::fixed << std::setprecision(0) << sys_summary.cpu_clock_max_mhz << ","
+          << std::fixed << std::setprecision(2) << sys_summary.power_mean_watts << ","
+          << std::fixed << std::setprecision(2) << sys_summary.power_max_watts << ","
+          << std::fixed << std::setprecision(1) << (sys_summary.gpu_available ? sys_summary.gpu_util_mean_pct : 0.0) << ","
+          << std::fixed << std::setprecision(0) << (sys_summary.gpu_available ? sys_summary.gpu_clock_mean_mhz : 0.0) << ","
+          << std::fixed << std::setprecision(2) << (sys_summary.gpu_available ? sys_summary.gpu_power_mean_watts : 0.0) << "\n";
     }
   }
 

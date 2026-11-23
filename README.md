@@ -68,6 +68,20 @@ Relying solely on average latency masks severe latency spikes caused by queue co
 - Latency outliers are **not discarded or clipped**.
 - Every sample is retained in the dataset, and frames exceeding the 3-sigma threshold (`mean + 3 * std_dev`) are counted, reported, and logged with their maximum outlier value.
 
+### 3.6 System Resource, Clock & Power Monitoring
+High throughput and zero-copy performance must be evaluated in context of hardware resource utilization and power efficiency:
+- **Background Non-Blocking Sampler (`SystemMonitor`)**: Runs on an independent asynchronous thread with negligible overhead (<0.05% CPU), taking periodic snapshots (200 ms interval) during the active benchmark window.
+- **CPU Utilization (%)**: Reads `/proc/stat` delta tick ratios across all cores, calculating both mean utilization and peak spikes during image transport.
+- **Memory & Process RSS (MB)**:
+  - **Process RSS / Peak RSS (`VmRSS`, `VmHWM`)**: Directly tracks subscriber resident memory consumption from `/proc/self/status` to quantify buffer pool footprint (e.g., zero-copy memory mapping vs heap copy).
+  - **System RAM Used (MB)**: Tracks host-level memory pressure from `/proc/meminfo` (`MemTotal - MemAvailable`).
+- **CPU Clock Frequencies (MHz)**: Samples dynamic CPU frequency scaling (`scaling_cur_freq` / `/proc/cpuinfo`) to detect thermal throttling and governor boost behavior (mean and max MHz).
+- **System Power Consumption (Watts)**: Multi-source power detection automatically reads:
+  - Linux `power_supply` subsystem (`power_now` or `voltage_now * current_now` in Watts).
+  - Linux RAPL energy counters (`/sys/class/powercap/intel-rapl*/energy_uj`).
+  - NVIDIA Jetson Tegra INA3221 rail power sensors.
+- **GPU Metrics (NVIDIA Devices)**: If an NVIDIA GPU is present, queries `nvidia-smi` for GPU core utilization (`%`), graphics clock frequency (`MHz`), and GPU power draw (`W`).
+
 ---
 
 ## 4. Getting Started
@@ -319,6 +333,11 @@ All benchmark CSVs and logs are saved under [`results/`](results/).
 | `shmem_max_ms` / `fallback_max_ms` | Maximum frame latency recorded (ms) |
 | `shmem_std_ms` / `fallback_std_ms` | Latency standard deviation / jitter (ms) |
 | `shmem_outliers` / `fallback_outliers` | Number of frames exceeding the 3-sigma latency threshold |
+| `shmem_cpu_mean_pct` / `fallback_cpu_mean_pct` | Mean host CPU utilization (%) during benchmark |
+| `shmem_cpu_max_pct` / `fallback_cpu_max_pct` | Peak host CPU utilization (%) during benchmark |
+| `shmem_rss_peak_mb` / `fallback_rss_peak_mb` | Peak process resident memory (`VmHWM`) in MB |
+| `shmem_clock_mean_mhz` / `fallback_clock_mean_mhz` | Average CPU clock frequency (MHz) across cores |
+| `shmem_power_mean_w` / `fallback_power_mean_w` | Mean system power consumption (Watts) |
 
 ### 6.2 Single-Mode and Intra-Process CSV Schema
 
@@ -342,6 +361,18 @@ All benchmark CSVs and logs are saved under [`results/`](results/).
 | `max_latency_ms` | Maximum frame latency (ms) |
 | `std_dev_ms` | Latency standard deviation (ms) |
 | `outliers_3sigma_count` | Frames exceeding `mean + 3 * std_dev` |
+| `cpu_util_mean_pct` | Mean host CPU utilization (%) |
+| `cpu_util_max_pct` | Peak host CPU utilization (%) |
+| `process_rss_mean_mb` | Average process RSS resident memory (MB) |
+| `process_rss_peak_mb` | Peak process RSS resident memory (`VmHWM`) in MB |
+| `system_ram_mb` | Host system RAM used (MB) |
+| `cpu_clock_mean_mhz` | Mean CPU core clock frequency (MHz) |
+| `cpu_clock_max_mhz` | Peak CPU boost clock frequency (MHz) |
+| `power_mean_w` | Mean system power draw (Watts) |
+| `power_max_w` | Peak system power draw (Watts) |
+| `gpu_util_pct` | Mean NVIDIA GPU utilization (%) |
+| `gpu_clock_mhz` | Mean NVIDIA GPU core clock (MHz) |
+| `gpu_power_w` | Mean NVIDIA GPU power draw (Watts) |
 
 ---
 
