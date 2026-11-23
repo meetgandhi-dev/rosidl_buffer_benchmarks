@@ -8,14 +8,24 @@ Comprehensive evaluation, verification, and latency benchmarking of ROS 2 `rosid
 
 ```text
 rosidl_buffer_benchmarks/
-├── shmem_bb_benchmark_ws/          # ROS 2 colcon workspace
+├── shmem_bb_benchmark_ws/                 # ROS 2 colcon workspace
 │   └── src/
-│       ├── shmem_buffer_backend/      # Git submodule: upstream shmem_buffer_backend (branch: lyrical)
-│       └── shmem_buffer_backend_test/ # Benchmark package: nodes, launch scripts, test patterns
-├── results/                        # Benchmark results, CSV logs, and latency plots
-├── .gitmodules                     # Submodule configuration
+│       ├── shmem_buffer_backend/             # Submodule: upstream shmem_buffer_backend (branch: lyrical)
+│       └── shmem_buffer_backend_test/        # Test package: pub/sub nodes, launch files, test patterns
+├── shmem_buffer_backend_benchmark/        # Submodule: 16-way benchmark suite (branch: develop)
+│   ├── shmem_buffer_backend_benchmark/      # ROS 2 package: benchmark nodes & orchestration scripts
+│   │   ├── src/shmem_buffer_backend_e2e_node.cpp
+│   │   └── scripts/
+│   │       ├── run_16way_benchmark.py        # Automated 16-way benchmark matrix runner
+│   │       └── run_e2e_benchmark.py          # Single end-to-end benchmark run
+│   ├── tools/
+│   │   ├── plot_benchmark_report.py          # Figure generation from CSV results
+│   │   └── plot_zenoh_comparison.py          # Zenoh vs SHM comparison plots
+│   └── patches/                             # FastRTPS optimization patches (unique_ptr, lazy, reserve)
+├── results/                               # Benchmark results, CSV logs, and latency plots
+├── .gitmodules                            # Submodule configuration
 ├── .gitignore
-└── README.md                       # Project overview, usage instructions, and results
+└── README.md
 ```
 
 ---
@@ -115,7 +125,62 @@ ros2 run shmem_buffer_backend_test benchmark_latency.py \
 
 ---
 
-## 5. Benchmark Results
+## 5. 16-Way Benchmark Suite (`shmem_buffer_backend_benchmark`)
+
+The [`shmem_buffer_backend_benchmark`](shmem_buffer_backend_benchmark/) submodule provides a full automated benchmark matrix covering:
+
+| Dimension | Values |
+| :--- | :--- |
+| **Variants** | `baseline`, `unique_ptr`, `lazy`, `reserve` |
+| **Payload sizes** | 64 B, 1 KiB, 4 KiB, 16 KiB, 64 KiB, 256 KiB, 1 MiB, 4 MiB, 16 MiB |
+| **Communication modes** | `inter_process`, `intra_process_va` |
+| **Backends** | `cpu`, `shmem` |
+| **Repeats** | 5 × 20 measured samples (10 warm-up messages excluded) |
+
+### Building the Benchmark Package
+
+The benchmark package lives inside `shmem_buffer_backend_benchmark/` and is built as a **separate workspace** (not inside `shmem_bb_benchmark_ws`):
+
+```bash
+source /opt/ros/lyrical/setup.bash
+cd shmem_buffer_backend_benchmark
+colcon build --symlink-install
+source install/setup.bash
+```
+
+### Running the 16-Way Benchmark
+
+```bash
+ros2 run shmem_buffer_backend_benchmark run_16way_benchmark.py \
+  --output-dir results/benchmark-results-16way \
+  --overwrite
+```
+
+This runs all 720 cases (4 variants × 9 sizes × 4 paths × 5 repeats) and writes per-variant summary CSVs plus raw per-sample CSVs into the specified output directory.
+
+### Generating Figures
+
+Requires a Python virtual environment (from the benchmark submodule):
+
+```bash
+cd shmem_buffer_backend_benchmark
+source .venv/bin/activate   # or: python -m venv .venv && pip install -r requirements.txt
+python tools/plot_benchmark_report.py --data-dir ../results/benchmark-results-16way
+```
+
+### FastRTPS Optimization Patches
+
+Three FastRTPS patches are provided under [`shmem_buffer_backend_benchmark/patches/`](shmem_buffer_backend_benchmark/patches/) to test publisher-side buffer reuse strategies:
+
+| Patch | Description |
+| :--- | :--- |
+| `0001-fastrtps-reuse-unique-ptr-buffer.patch` | Reuse `unique_ptr` buffer across publishes |
+| `0002-fastrtps-reuse-fastbuffer-lazy.patch` | Lazy reuse of `FastBuffer` |
+| `0003-fastrtps-reuse-fastbuffer-reserve.patch` | Reserve-based `FastBuffer` reuse |
+
+---
+
+## 6. Benchmark Results
 
 All benchmark CSVs and logs are saved under [`results/`](results/).
 
