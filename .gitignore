@@ -1,0 +1,23 @@
+# ROS 2 build artifacts
+**/build/
+**/install/
+**/log/
+build/
+install/
+log/
+
+# IDE and editor settings
+.vscode/
+.idea/
+*.swp
+*~
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+
+# Generated benchmark output files in workspace (keep files in results/)
+shmem_bb_benchmark_ws/*.csv
+shmem_bb_benchmark_ws/**/*.csv
+!results/
+!results/**
