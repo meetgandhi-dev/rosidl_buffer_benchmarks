@@ -186,6 +186,15 @@ def generate_launch_description():
         output='screen',
     )
 
+    shutdown_on_container_exit = RegisterEventHandler(
+        OnProcessExit(
+            target_action=container,
+            on_exit=[
+                EmitEvent(event=Shutdown(reason='Container process finished')),
+            ],
+        )
+    )
+
     return LaunchDescription([
         width_arg,
         height_arg,
@@ -198,5 +207,6 @@ def generate_launch_description():
         history_depth_arg,
         OpaqueFunction(function=init_csv_file),
         container,
+        shutdown_on_container_exit,
         RegisterEventHandler(OnShutdown(on_shutdown=print_csv_results)),
     ])

@@ -14,6 +14,7 @@
 
 #include "shmem_bb_benchmark/shmem_image_subscriber_node.hpp"
 
+#include <unistd.h>
 #include <algorithm>
 #include <cmath>
 #include <exception>
@@ -24,6 +25,7 @@
 #include <numeric>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "rclcpp/subscription_options.hpp"
@@ -85,7 +87,13 @@ ShmemImageSubscriberNode::ShmemImageSubscriberNode(const rclcpp::NodeOptions & o
             write_summary_report(last_backend_, last_width_, last_height_);
             if (auto_exit_) {
               watchdog_timer_->cancel();
-              rclcpp::shutdown();
+              if (rclcpp::ok()) {
+                rclcpp::shutdown();
+              }
+              std::thread([]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+                _exit(0);
+              }).detach();
             }
           }
         }
@@ -109,6 +117,10 @@ ShmemImageSubscriberNode::~ShmemImageSubscriberNode()
 
 void ShmemImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstSharedPtr msg)
 {
+  if (!rclcpp::ok()) {
+    return;
+  }
+
   ++received_count_;
 
   const std::string backend = msg->data.get_backend_type();
@@ -229,7 +241,14 @@ void ShmemImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShar
         watchdog_timer_->cancel();
       }
       RCLCPP_INFO(get_logger(), "Auto-exit triggered. Shutting down subscriber.");
-      rclcpp::shutdown();
+      if (rclcpp::ok()) {
+        rclcpp::shutdown();
+      }
+      // Safety watchdog: ensure process terminates and does not hang on lingering background threads
+      std::thread([]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        _exit(0);
+      }).detach();
     }
   }
 }

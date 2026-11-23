@@ -56,9 +56,17 @@ ShmemImagePublisherNode::ShmemImagePublisherNode(const rclcpp::NodeOptions & opt
 
 void ShmemImagePublisherNode::publish_timer_callback()
 {
+  if (!rclcpp::ok()) {
+    if (timer_) {
+      timer_->cancel();
+    }
+    return;
+  }
+
   const int total_messages = (max_messages_ > 0) ? (max_messages_ + warmup_messages_) : 0;
   if (total_messages > 0 && static_cast<int>(sequence_) >= total_messages) {
     timer_->cancel();
+    message_history_.clear();
     RCLCPP_INFO(
       get_logger(),
       "Finished publishing %zu messages (%d warm-up + %d benchmark). Stopping.",
@@ -69,7 +77,9 @@ void ShmemImagePublisherNode::publish_timer_callback()
         [this]() {
           shutdown_timer_->cancel();
           RCLCPP_INFO(get_logger(), "Publisher auto-exit triggered.");
-          rclcpp::shutdown();
+          if (rclcpp::ok()) {
+            rclcpp::shutdown();
+          }
         });
     }
     return;
