@@ -14,7 +14,7 @@ rosidl_buffer_benchmarks/
 │       └── shmem_bb_benchmark/        # Benchmark package: nodes, launch scripts, test patterns
 ├── cuda_bb_benchmark_ws/           # CUDA Buffer Benchmark Workspace
 │   └── src/
-│       ├── rosidl_buffer_backends/    # Git submodule: upstream rosidl_buffer_backends (branch: main)
+│       ├── rosidl_buffer_backends/    # Git submodule: upstream rosidl_buffer_backends (tag: 0.1.2)
 │       └── cuda_bb_benchmark/         # Benchmark package: CUDA pub/sub nodes, launch scripts, sweep
 ├── results/                        # Benchmark results, CSV logs, and latency plots
 ├── .gitmodules                     # Submodule configurations
