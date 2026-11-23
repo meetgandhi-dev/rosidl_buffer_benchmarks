@@ -22,10 +22,9 @@ rosidl_buffer_benchmarks/
 
 ## 2. Prerequisites
 
-- **Operating System**: Ubuntu 24.04 LTS (Noble) or Ubuntu 22.04 LTS (Jammy)
-- **Target Architectures**: `x86_64` (AMD64) or `aarch64` (ARM64 / NVIDIA Jetson AGX Orin)
-- **ROS 2 Distribution**: ROS 2 **Lyrical** (custom-patched ROS 2 providing `acceptable_buffer_backends`).
-  - Pre-built Debian packages for AMD64 and ARM64 are available via [`ros2_tier3_packages`](https://github.com/meetgandhi-dev/ros2_tier3_packages).
+1. **Ubuntu 26.04** with ROS 2 **Lyrical** (preferred)
+2. **Ubuntu 24.04** with ROS 2 **Lyrical** (pre-built Debian packages available via [`ros2_tier3_packages`](https://github.com/meetgandhi-dev/ros2_tier3_packages))
+3. **Architecture**: `amd64` (x86_64) or `arm64` (aarch64)
 
 ---
 
@@ -63,13 +62,15 @@ colcon build --symlink-install
 
 ## 4. Running Benchmarks
 
+### 4.1. Shared Memory (`shmem`) Benchmarks
+
 Always source the built workspace before launching nodes:
 
 ```bash
 source shmem_bb_benchmark_ws/install/setup.bash
 ```
 
-### Option A: 2-Subscriber Comparison (Shared vs. Fallback Side-by-Side)
+#### Option A: 2-Subscriber Comparison (Shared vs. Fallback Side-by-Side)
 
 Runs **1 publisher** and **2 subscribers** on the same topic simultaneously:
 - 1 Publisher: Allocates message in shared memory (`shmem`).
@@ -84,7 +85,7 @@ ros2 launch shmem_bb_benchmark shmem_fallback_two_subs.launch.py \
   csv_path:=$(pwd)/results/1080p_30fps_two_subs_comparison.csv
 ```
 
-### Option B: 1-Subscriber Selectable Mode (Inter-Process: Shared vs. Wire)
+#### Option B: 1-Subscriber Selectable Mode (Inter-Process: Shared vs. Wire)
 
 Runs 1 publisher and 1 subscriber **in separate processes** in either `shared` (zero-copy SHM) or `wire` (standard DDS CPU copy) mode:
 
@@ -100,7 +101,7 @@ ros2 launch shmem_bb_benchmark shmem_or_wire_pub_sub.launch.py \
   csv_path:=$(pwd)/results/1080p_30fps_wire.csv
 ```
 
-### Option C: Intra-Process Comparison (Same Process: SHM vs. CPU)
+#### Option C: Intra-Process Comparison (Same Process: SHM vs. CPU)
 
 Runs both publisher and subscriber **inside the same OS process** using a `ComposableNodeContainer`
 with `use_intra_process_comms: True`. The message `shared_ptr` is delivered directly with no
@@ -119,7 +120,7 @@ ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \
   csv_path:=$(pwd)/results/1080p_30fps_intra_cpu.csv
 ```
 
-### Transport Coverage Summary
+#### Transport Coverage Summary
 
 | Path | Communication | Backend | Launch File |
 |:---|:---:|:---:|:---|
@@ -129,7 +130,7 @@ ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \
 | SHM backend, same process | Intra-process | `shmem` | `intra_process_pub_sub.launch.py mode:=shmem` |
 | CPU backend, same process | Intra-process | `cpu` | `intra_process_pub_sub.launch.py mode:=cpu` |
 
-### Option D: Automated Multi-Resolution Sweep
+#### Option D: Automated Multi-Resolution Sweep
 
 Run multi-resolution/multi-rate sweeps across backends using the benchmarking script:
 
@@ -141,6 +142,10 @@ ros2 run shmem_bb_benchmark benchmark_latency.py \
   --backends both \
   --output results/latency_sweep_summary.csv
 ```
+
+### 4.2. CUDA Benchmarks (TBD)
+
+*CUDA zero-copy and buffer backend benchmarks are planned and will be documented here.*
 
 ---
 
