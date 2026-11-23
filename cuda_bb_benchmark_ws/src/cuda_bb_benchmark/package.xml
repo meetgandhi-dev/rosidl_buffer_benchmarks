@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>cuda_bb_benchmark</name>
+  <version>0.1.0</version>
+  <description>Benchmarking suite for cuda_buffer_backend in ROS 2</description>
+  <maintainer email="meet.gandhi@einfochips.com">Meet Gandhi</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>cuda-toolkit</depend>
+  <depend>cuda_buffer</depend>
+  <depend>cuda_buffer_backend</depend>
+  <depend>cuda_buffer_backend_msgs</depend>
+  <depend>rosidl_buffer</depend>
+  <depend>rosidl_buffer_backend</depend>
+  <depend>rosidl_runtime_cpp</depend>
+
+  <exec_depend>cuda_buffer_py</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

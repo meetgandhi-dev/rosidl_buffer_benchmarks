@@ -2,3 +2,6 @@
 	path = shmem_bb_benchmark_ws/src/shmem_buffer_backend
 	url = https://github.com/dskkato/shmem_buffer_backend.git
 	branch = lyrical
+[submodule "cuda_bb_benchmark_ws/src/rosidl_buffer_backends"]
+	path = cuda_bb_benchmark_ws/src/rosidl_buffer_backends
+	url = https://github.com/ros2/rosidl_buffer_backends.git
