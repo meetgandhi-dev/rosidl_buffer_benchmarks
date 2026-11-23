@@ -17,6 +17,7 @@
 
 #include <cuda_runtime.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -66,6 +67,9 @@ private:
 
   std::size_t sequence_{0};
   std::deque<sensor_msgs::msg::Image> message_history_;
+
+  std::chrono::steady_clock::time_point benchmark_start_time_{};
+  std::chrono::steady_clock::time_point benchmark_end_time_{};
 };
 
 }  // namespace cuda_bb_benchmark

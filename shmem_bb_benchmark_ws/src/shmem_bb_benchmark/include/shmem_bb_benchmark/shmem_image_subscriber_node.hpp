@@ -15,10 +15,12 @@
 #ifndef SHMEM_BB_BENCHMARK__SHMEM_IMAGE_SUBSCRIBER_NODE_HPP_
 #define SHMEM_BB_BENCHMARK__SHMEM_IMAGE_SUBSCRIBER_NODE_HPP_
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "rclcpp/node.hpp"
 #include "rclcpp/node_options.hpp"
@@ -72,6 +74,18 @@ private:
   std::string last_backend_{"shmem"};
   uint32_t last_width_{0};
   uint32_t last_height_{0};
+
+  // Frame and sequence tracking for drop detection
+  std::size_t last_seq_{0};
+  std::size_t first_bench_seq_{0};
+  std::size_t last_bench_seq_{0};
+  std::size_t dropped_frames_{0};
+
+  // Steady-clock throughput tracking
+  std::chrono::steady_clock::time_point sub_first_recv_time_{};
+  std::chrono::steady_clock::time_point sub_last_recv_time_{};
+  int64_t pub_first_stamp_ns_{0};
+  int64_t pub_last_stamp_ns_{0};
 };
 
 }  // namespace shmem_bb_benchmark

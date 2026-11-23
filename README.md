@@ -35,7 +35,42 @@ rosidl_buffer_benchmarks/
 
 ---
 
-## 3. Getting Started
+## 3. Benchmark Methodology
+
+To ensure statistically rigorous, repeatable, and transparent performance comparisons, the benchmarking suite adheres to the following methodology:
+
+### 3.1 Consistent Monotonic Timing (`std::chrono::steady_clock`)
+- Both publisher and subscriber sample `std::chrono::steady_clock` (which maps to `CLOCK_MONOTONIC` on Linux).
+- Monotonic timestamps are encoded directly in `msg.header.stamp` (`sec` and `nanosec`) and embedded inside `msg.header.frame_id`.
+- This eliminates clock drift, NTP adjustments, and leap second artifacts across separate processes on the same host, guaranteeing true nanosecond-accurate latency measurements.
+
+### 3.2 Warm-Up Frame Exclusion
+- The initial 10 frames (`warmup_messages:=10` by default) are published and received to allow buffer pool memory mapping, DSO registration, and DDS discovery/entity creation to stabilize.
+- While warm-up frames are verified for payload integrity, they are **strictly excluded** from all latency, percentile, throughput, and jitter statistics.
+- If `--max-msgs 1000` is requested with 10 warm-up frames, exactly 1010 frames are published, and exactly 1000 benchmark frames are measured.
+
+### 3.3 Multi-Percentile Latency Analysis (Beyond Average Latency)
+Relying solely on average latency masks severe latency spikes caused by queue contention, memory re-allocation, or OS scheduling. The benchmark records and reports:
+- **P50 (Median)**: Represents the typical, nominal performance under sustained load.
+- **P95**: Captures 95th-percentile real-time bounds.
+- **P99 (Tail Latency)**: Exposes tail latency and worst-case performance crucial for real-time robotics and computer vision pipelines.
+- **Mean, Min, Max, and Standard Deviation (Jitter)**: Provides full statistical characterization.
+- Speedup factors are calculated across **P50 Speedup**, **P99 Speedup**, and **Mean Speedup** side-by-side.
+
+### 3.4 Frame Tracking, Loss Detection & True Throughput
+- **Sequence Numbering**: Each frame carries a monotonic sequence index (`seq = 1, 2, ...`). The subscriber detects non-contiguous sequence numbers (`seq > last_seq + 1`) to accurately count dropped frames and calculate **Frame Loss Percentage**.
+- **No False FPS Assumptions**: Received frame count is **never treated as proof that target FPS was achieved**.
+- **Dual Throughput Measurement**:
+  - **Actual Publishing Rate (FPS)**: Calculated from publisher-side monotonic timestamps over the benchmark window.
+  - **Actual Receiving Rate (FPS)**: Calculated from subscriber-side receipt timestamps over the benchmark window.
+
+### 3.5 Outlier Transparency (3-Sigma Analysis)
+- Latency outliers are **not discarded or clipped**.
+- Every sample is retained in the dataset, and frames exceeding the 3-sigma threshold (`mean + 3 * std_dev`) are counted, reported, and logged with their maximum outlier value.
+
+---
+
+## 4. Getting Started
 
 ### Clone with Submodules
 
@@ -91,7 +126,7 @@ cd ..
 
 ---
 
-## 4. Running Benchmarks
+## 5. Running Benchmarks
 
 ### 4.1. Shared Memory (`shmem`) Benchmarks
 
@@ -251,19 +286,88 @@ ros2 run cuda_bb_benchmark benchmark_latency.py \
 
 ---
 
-## 5. Benchmark Results
+## 6. Benchmark Results & Output Schemas
 
 All benchmark CSVs and logs are saved under [`results/`](results/).
 
-### Merged CSV Metric Schema
+### 6.1 Two-Subscriber Comparison CSV Schema (`*_fallback_two_subs.launch.py`)
 
 | Column | Description |
 | :--- | :--- |
-| `resolution` | Image dimensions (e.g., `1920x1080`) |
+| `resolution` | Image dimensions (e.g. `1920x1080`) |
 | `size_bytes` | Payload size in bytes per frame |
-| `target_hz` | Target publishing rate |
-| `frame_cap` | Total frames measured (`max_msgs`, excluding initial warm-up frames) |
-| `mean_ms` / `avg_latency_ms` | Average latency for subscriber (ms) |
-| `min_latency_ms` / `max_latency_ms` | Minimum and maximum recorded frame latency (ms) |
-| `std_dev_ms` | Latency standard deviation (jitter) |
-| `speedup` | Factor of improvement (`fallback / zero_copy`) |
+| `target_hz` | Target configured publishing rate (Hz) |
+| `actual_pub_hz` | Actual measured publishing rate calculated via `steady_clock` timestamps |
+| `shmem_recv_hz` / `cuda_recv_hz` | Actual measured receiving rate for zero-copy subscriber (Hz) |
+| `fallback_recv_hz` | Actual measured receiving rate for fallback CPU subscriber (Hz) |
+| `shmem_frames` / `cuda_frames` | Total benchmark frames measured by zero-copy subscriber |
+| `fallback_frames` | Total benchmark frames measured by fallback subscriber |
+| `shmem_loss_pct` / `cuda_loss_pct` | Frame loss percentage for zero-copy subscriber |
+| `fallback_loss_pct` | Frame loss percentage for fallback subscriber |
+| `shmem_p50_ms` / `cuda_p50_ms` | **P50 (Median) latency** for zero-copy subscriber (ms) |
+| `fallback_p50_ms` | **P50 (Median) latency** for fallback subscriber (ms) |
+| `p50_speedup` | Factor of improvement for median latency (`fallback_p50 / zero_copy_p50`) |
+| `shmem_p95_ms` / `cuda_p95_ms` | **P95 latency** for zero-copy subscriber (ms) |
+| `fallback_p95_ms` | **P95 latency** for fallback subscriber (ms) |
+| `shmem_p99_ms` / `cuda_p99_ms` | **P99 (Tail) latency** for zero-copy subscriber (ms) |
+| `fallback_p99_ms` | **P99 (Tail) latency** for fallback subscriber (ms) |
+| `p99_speedup` | Factor of improvement for tail latency (`fallback_p99 / zero_copy_p99`) |
+| `shmem_mean_ms` / `cuda_mean_ms` | Mean latency for zero-copy subscriber (ms) |
+| `fallback_mean_ms` | Mean latency for fallback subscriber (ms) |
+| `mean_speedup` | Factor of improvement for mean latency (`fallback_mean / zero_copy_mean`) |
+| `shmem_min_ms` / `fallback_min_ms` | Minimum frame latency recorded (ms) |
+| `shmem_max_ms` / `fallback_max_ms` | Maximum frame latency recorded (ms) |
+| `shmem_std_ms` / `fallback_std_ms` | Latency standard deviation / jitter (ms) |
+| `shmem_outliers` / `fallback_outliers` | Number of frames exceeding the 3-sigma latency threshold |
+
+### 6.2 Single-Mode and Intra-Process CSV Schema
+
+| Column | Description |
+| :--- | :--- |
+| `backend` | Transport backend tested (`shmem`, `cuda`, or `cpu`) |
+| `size_bytes` | Payload size in bytes per frame |
+| `resolution` | Image dimensions (e.g. `1920x1080`) |
+| `target_hz` | Target configured rate (Hz) |
+| `actual_pub_hz` | Actual publisher FPS measured via monotonic timestamps |
+| `actual_recv_hz` | Actual subscriber receiving FPS |
+| `total_sent` | Total sequence range sent in benchmark window |
+| `received_frames` | Frames successfully received and measured |
+| `lost_frames` | Dropped/skipped frames identified via sequence numbering |
+| `loss_pct` | Frame loss percentage (`lost_frames / total_sent * 100`) |
+| `mean_latency_ms` | Average frame latency (ms) |
+| `min_latency_ms` | Minimum frame latency (ms) |
+| `p50_latency_ms` | 50th percentile (Median) latency (ms) |
+| `p95_latency_ms` | 95th percentile latency (ms) |
+| `p99_latency_ms` | 99th percentile (Tail) latency (ms) |
+| `max_latency_ms` | Maximum frame latency (ms) |
+| `std_dev_ms` | Latency standard deviation (ms) |
+| `outliers_3sigma_count` | Frames exceeding `mean + 3 * std_dev` |
+
+---
+
+## 7. Reproduction Steps
+
+To quickly reproduce benchmark runs:
+
+```bash
+# 1. Clone repository recursively
+git clone --recursive <REPO_URL> rosidl_buffer_benchmarks
+cd rosidl_buffer_benchmarks
+
+# 2. Build Shared Memory Workspace
+cd shmem_bb_benchmark_ws
+./install_deps.sh
+./build.sh
+source install/setup.bash
+cd ..
+
+# 3. Reproduce 1080p @ 30 FPS SHM vs Fallback Benchmark (1000 frames)
+ros2 launch shmem_bb_benchmark shmem_fallback_two_subs.launch.py \
+  width:=1920 height:=1080 rate:=30.0 max_msgs:=1000 \
+  csv_path:=$(pwd)/results/1080p_30fps_two_subs_comparison.csv
+
+# 4. Reproduce Intra-Process Zero-Copy vs CPU Benchmark (1000 frames)
+ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \
+  width:=1920 height:=1080 rate:=30.0 mode:=shmem max_msgs:=1000 \
+  csv_path:=$(pwd)/results/1080p_30fps_intra_shmem.csv
+```

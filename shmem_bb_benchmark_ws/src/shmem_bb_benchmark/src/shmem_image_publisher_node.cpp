@@ -67,10 +67,17 @@ void ShmemImagePublisherNode::publish_timer_callback()
   if (total_messages > 0 && static_cast<int>(sequence_) >= total_messages) {
     timer_->cancel();
     message_history_.clear();
+    benchmark_end_time_ = std::chrono::steady_clock::now();
+
+    const double elapsed_sec = std::chrono::duration<double>(
+      benchmark_end_time_ - benchmark_start_time_).count();
+    const double actual_fps = (elapsed_sec > 0.0 && max_messages_ > 1) ?
+      (max_messages_ - 1) / elapsed_sec : publish_rate_hz_;
+
     RCLCPP_INFO(
       get_logger(),
-      "Finished publishing %zu messages (%d warm-up + %d benchmark). Stopping.",
-      sequence_, warmup_messages_, max_messages_);
+      "Finished publishing %zu messages (%d warm-up + %d benchmark). Actual Pub Rate: %.2f FPS. Stopping.",
+      sequence_, warmup_messages_, max_messages_, actual_fps);
     if (auto_exit_ && !shutdown_timer_) {
       shutdown_timer_ = create_wall_timer(
         std::chrono::milliseconds(2000),
@@ -95,9 +102,20 @@ void ShmemImagePublisherNode::publish_timer_callback()
   const std::size_t seq = sequence_ + 1u;
   const std::size_t payload_size = static_cast<std::size_t>(image_width_) * image_height_;
 
+  // Measure timestamp using std::chrono::steady_clock for consistent monotonic pub-to-sub latency
+  const auto steady_now = std::chrono::steady_clock::now();
+  const int64_t steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    steady_now.time_since_epoch()).count();
+
+  if (seq == static_cast<std::size_t>(warmup_messages_ + 1)) {
+    benchmark_start_time_ = steady_now;
+  }
+
   sensor_msgs::msg::Image msg;
-  msg.header.stamp = now();
-  msg.header.frame_id = "shmem_frame_" + std::to_string(seq);
+  msg.header.stamp.sec = static_cast<int32_t>(steady_ns / 1000000000LL);
+  msg.header.stamp.nanosec = static_cast<uint32_t>(steady_ns % 1000000000LL);
+  // Store sequence and steady timestamp nanoseconds in frame_id for robust tracking
+  msg.header.frame_id = "frame_" + std::to_string(seq) + "_" + std::to_string(steady_ns);
   msg.height = static_cast<std::uint32_t>(image_height_);
   msg.width = static_cast<std::uint32_t>(image_width_);
   msg.encoding = encoding_;

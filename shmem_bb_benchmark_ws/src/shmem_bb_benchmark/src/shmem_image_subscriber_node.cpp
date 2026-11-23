@@ -16,6 +16,7 @@
 
 #include <unistd.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <exception>
 #include <fstream>
@@ -121,6 +122,10 @@ void ShmemImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShar
     return;
   }
 
+  const auto steady_now = std::chrono::steady_clock::now();
+  const int64_t sub_steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    steady_now.time_since_epoch()).count();
+
   ++received_count_;
 
   const std::string backend = msg->data.get_backend_type();
@@ -128,18 +133,35 @@ void ShmemImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShar
   last_width_ = msg->width;
   last_height_ = msg->height;
 
-  // Extract sequence number from frame_id (e.g. "shmem_frame_123")
+  // Extract publisher steady_clock timestamp from header.stamp
+  int64_t pub_steady_ns = static_cast<int64_t>(msg->header.stamp.sec) * 1000000000LL +
+    static_cast<int64_t>(msg->header.stamp.nanosec);
+
+  // Extract sequence number from frame_id (format: "frame_<seq>_<steady_ns>" or "shmem_frame_<seq>")
   std::size_t seq = received_count_;
-  const auto last_underscore = msg->header.frame_id.rfind('_');
-  if (last_underscore != std::string::npos &&
-    last_underscore + 1 < msg->header.frame_id.size())
-  {
+  const auto first_underscore = msg->header.frame_id.find('_');
+  if (first_underscore != std::string::npos) {
+    const auto second_underscore = msg->header.frame_id.find('_', first_underscore + 1);
+    const auto seq_str = (second_underscore != std::string::npos) ?
+      msg->header.frame_id.substr(first_underscore + 1, second_underscore - first_underscore - 1) :
+      msg->header.frame_id.substr(first_underscore + 1);
     try {
-      seq = std::stoull(msg->header.frame_id.substr(last_underscore + 1));
+      seq = std::stoull(seq_str);
     } catch (...) {
       seq = received_count_;
     }
   }
+
+  // Frame drop tracking
+  if (last_seq_ > 0 && seq > last_seq_ + 1) {
+    const std::size_t dropped = seq - last_seq_ - 1;
+    dropped_frames_ += dropped;
+    RCLCPP_WARN(
+      get_logger(),
+      "Frame drop detected: expected msg #%zu, got #%zu (%zu frame(s) lost)",
+      last_seq_ + 1, seq, dropped);
+  }
+  last_seq_ = seq;
 
   const bool backend_valid =
     use_shm_ ? (!require_shmem_ || backend == "shmem") : (backend == "cpu");
@@ -181,23 +203,35 @@ void ShmemImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShar
       get_logger(), "Message #%zu content verification failed!", received_count_);
   }
 
-  const double latency_ms = (now() - msg->header.stamp).seconds() * 1000.0;
-  const bool is_warmup = (warmup_messages_ > 0 && static_cast<int>(received_count_) <= warmup_messages_);
+  // Consistent monotonic latency calculation via steady_clock
+  const double latency_ms = (sub_steady_ns >= pub_steady_ns) ?
+    static_cast<double>(sub_steady_ns - pub_steady_ns) / 1000000.0 : 0.0;
+  const bool is_warmup = (warmup_messages_ > 0 && static_cast<int>(seq) <= warmup_messages_);
 
   if (is_warmup) {
     RCLCPP_INFO(
       get_logger(),
-      "Received warm-up msg #%zu/%d (%zux%zu, %zu B, backend: '%s', latency: %.2f ms, valid: %s) [ignored for benchmark]",
-      received_count_, warmup_messages_, static_cast<std::size_t>(msg->width),
+      "Received warm-up msg #%zu/%d (%zux%zu, %zu B, backend: '%s', latency: %.3f ms, valid: %s) [ignored for benchmark]",
+      seq, warmup_messages_, static_cast<std::size_t>(msg->width),
       static_cast<std::size_t>(msg->height), msg->data.size(), backend.c_str(),
       latency_ms, (backend_valid && content_valid) ? "YES" : "NO");
   } else {
+    if (latencies_ms_.empty()) {
+      first_bench_seq_ = seq;
+      sub_first_recv_time_ = steady_now;
+      pub_first_stamp_ns_ = pub_steady_ns;
+    }
+    last_bench_seq_ = seq;
+    sub_last_recv_time_ = steady_now;
+    pub_last_stamp_ns_ = pub_steady_ns;
+
     latencies_ms_.push_back(latency_ms);
     const std::size_t bench_idx = latencies_ms_.size();
+
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 1000,
-      "Received msg #%zu [BENCHMARK %zu/%d] (%zux%zu, %zu B, backend: '%s', latency: %.2f ms, valid: %s)",
-      received_count_, bench_idx, max_messages_, static_cast<std::size_t>(msg->width),
+      "Received msg #%zu [BENCHMARK %zu/%d] (%zux%zu, %zu B, backend: '%s', latency: %.3f ms, valid: %s)",
+      seq, bench_idx, max_messages_, static_cast<std::size_t>(msg->width),
       static_cast<std::size_t>(msg->height), msg->data.size(), backend.c_str(),
       latency_ms, (backend_valid && content_valid) ? "YES" : "NO");
   }
@@ -228,12 +262,6 @@ void ShmemImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShar
      seq >= static_cast<std::size_t>(total_expected)));
 
   if (is_complete) {
-    if (seq > received_count_) {
-      RCLCPP_WARN(
-        get_logger(),
-        "Sequence completed up to msg #%zu (%zu frames received, %zu dropped/skipped).",
-        seq, received_count_, seq - received_count_);
-    }
     write_summary_report(backend, msg->width, msg->height);
 
     if (auto_exit_) {
@@ -263,8 +291,23 @@ void ShmemImageSubscriberNode::write_summary_report(
 
   auto samples = latencies_ms_;
   std::sort(samples.begin(), samples.end());
+
+  auto percentile = [&samples](double p) -> double {
+    if (samples.empty()) {return 0.0;}
+    if (samples.size() == 1) {return samples[0];}
+    double rank = p * static_cast<double>(samples.size() - 1);
+    std::size_t lower = static_cast<std::size_t>(rank);
+    std::size_t upper = std::min(lower + 1, samples.size() - 1);
+    double weight = rank - static_cast<double>(lower);
+    return samples[lower] * (1.0 - weight) + samples[upper] * weight;
+  };
+
   const double min_ms = samples.empty() ? 0.0 : samples.front();
   const double max_ms = samples.empty() ? 0.0 : samples.back();
+  const double p50_ms = percentile(0.50);
+  const double p95_ms = percentile(0.95);
+  const double p99_ms = percentile(0.99);
+
   double sum = 0.0;
   for (double v : samples) {
     sum += v;
@@ -276,17 +319,53 @@ void ShmemImageSubscriberNode::write_summary_report(
   }
   const double std_dev_ms = samples.empty() ? 0.0 : std::sqrt(sq_diff / samples.size());
 
+  // Outlier detection: frames exceeding 3-sigma
+  const double outlier_threshold_ms = mean_ms + 3.0 * std_dev_ms;
+  std::size_t outlier_count = 0;
+  for (double v : samples) {
+    if (v > outlier_threshold_ms) {
+      ++outlier_count;
+    }
+  }
+
   const std::size_t measured_frames = latencies_ms_.size();
   const std::size_t size_bytes = static_cast<std::size_t>(width) * height;
 
-  RCLCPP_INFO(
-    get_logger(),
-    "=== Benchmark: %zu measured frames (excluded %d warm-up frames), %ux%u (%zu B), Target: %.1f Hz ===",
-    measured_frames, warmup_messages_, width, height, size_bytes, target_hz_);
-  RCLCPP_INFO(
-    get_logger(),
-    "Latency (ms) -> Mean: %.3f | Min: %.3f | Max: %.3f | StdDev: %.3f",
+  // Frame loss calculation
+  const std::size_t total_sent_in_window = (last_bench_seq_ >= first_bench_seq_) ?
+    (last_bench_seq_ - first_bench_seq_ + 1) : measured_frames;
+  const std::size_t lost_frames = (total_sent_in_window > measured_frames) ?
+    (total_sent_in_window - measured_frames) : 0;
+  const double frame_loss_pct = (total_sent_in_window > 0) ?
+    (100.0 * static_cast<double>(lost_frames) / static_cast<double>(total_sent_in_window)) : 0.0;
+
+  // Actual Publishing FPS (based on steady_clock publisher timestamp delta)
+  const double pub_duration_s = (pub_last_stamp_ns_ > pub_first_stamp_ns_) ?
+    static_cast<double>(pub_last_stamp_ns_ - pub_first_stamp_ns_) / 1e9 : 0.0;
+  const double actual_pub_hz = (pub_duration_s > 0.0 && total_sent_in_window > 1) ?
+    static_cast<double>(total_sent_in_window - 1) / pub_duration_s : target_hz_;
+
+  // Actual Receiving FPS (based on steady_clock subscriber receipt delta)
+  const double sub_duration_s = std::chrono::duration<double>(
+    sub_last_recv_time_ - sub_first_recv_time_).count();
+  const double actual_recv_hz = (sub_duration_s > 0.0 && measured_frames > 1) ?
+    static_cast<double>(measured_frames - 1) / sub_duration_s : 0.0;
+
+  RCLCPP_INFO(get_logger(), "==========================================================================");
+  RCLCPP_INFO(get_logger(), " BENCHMARK SUMMARY REPORT: backend='%s', %ux%u (%zu B)",
+    backend.c_str(), width, height, size_bytes);
+  RCLCPP_INFO(get_logger(), "--------------------------------------------------------------------------");
+  RCLCPP_INFO(get_logger(), " Throughput:  Target: %.1f Hz | Actual Pub: %.2f Hz | Actual Recv: %.2f Hz",
+    target_hz_, actual_pub_hz, actual_recv_hz);
+  RCLCPP_INFO(get_logger(), " Frames:      Measured: %zu | Total Sent: %zu | Lost: %zu (%.2f%% loss) | Warm-up: %d",
+    measured_frames, total_sent_in_window, lost_frames, frame_loss_pct, warmup_messages_);
+  RCLCPP_INFO(get_logger(), " Latency (ms):");
+  RCLCPP_INFO(get_logger(), "   P50:  %.3f | P95: %.3f | P99: %.3f", p50_ms, p95_ms, p99_ms);
+  RCLCPP_INFO(get_logger(), "   Mean: %.3f | Min: %.3f | Max: %.3f | StdDev: %.3f",
     mean_ms, min_ms, max_ms, std_dev_ms);
+  RCLCPP_INFO(get_logger(), " Outliers:    %zu frame(s) exceeded 3-sigma (%.3f ms) [Max outlier: %.3f ms]",
+    outlier_count, outlier_threshold_ms, max_ms);
+  RCLCPP_INFO(get_logger(), "==========================================================================");
 
   if (!summary_csv_path_.empty()) {
     std::ifstream check_file(summary_csv_path_);
@@ -296,20 +375,29 @@ void ShmemImageSubscriberNode::write_summary_report(
     std::ofstream csv(summary_csv_path_, std::ios::app);
     if (csv.is_open()) {
       if (!exists) {
-        csv << "backend,size_bytes,resolution,target_hz,frame_cap,received_frames,avg_latency_ms,"
-            << "min_latency_ms,max_latency_ms,std_dev_ms\n";
+        csv << "backend,size_bytes,resolution,target_hz,actual_pub_hz,actual_recv_hz,"
+            << "total_sent,received_frames,lost_frames,loss_pct,mean_latency_ms,"
+            << "min_latency_ms,p50_latency_ms,p95_latency_ms,p99_latency_ms,max_latency_ms,"
+            << "std_dev_ms,outliers_3sigma_count\n";
       }
       csv << backend << ","
           << size_bytes << ","
           << width << "x" << height << ","
-          << target_hz_ << ","
-          << max_messages_ << ","
+          << std::fixed << std::setprecision(1) << target_hz_ << ","
+          << std::fixed << std::setprecision(2) << actual_pub_hz << ","
+          << std::fixed << std::setprecision(2) << actual_recv_hz << ","
+          << total_sent_in_window << ","
           << measured_frames << ","
-          << std::fixed << std::setprecision(3)
-          << mean_ms << ","
-          << min_ms << ","
-          << max_ms << ","
-          << std_dev_ms << "\n";
+          << lost_frames << ","
+          << std::fixed << std::setprecision(2) << frame_loss_pct << ","
+          << std::fixed << std::setprecision(3) << mean_ms << ","
+          << std::fixed << std::setprecision(3) << min_ms << ","
+          << std::fixed << std::setprecision(3) << p50_ms << ","
+          << std::fixed << std::setprecision(3) << p95_ms << ","
+          << std::fixed << std::setprecision(3) << p99_ms << ","
+          << std::fixed << std::setprecision(3) << max_ms << ","
+          << std::fixed << std::setprecision(3) << std_dev_ms << ","
+          << outlier_count << "\n";
     }
   }
 

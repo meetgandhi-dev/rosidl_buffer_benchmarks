@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import csv
 import os
 
 from launch import LaunchDescription
@@ -36,24 +37,49 @@ def init_csv_file(context):
             os.makedirs(os.path.dirname(os.path.abspath(csv_file)), exist_ok=True)
             with open(csv_file, 'w') as f:
                 f.write(
-                    'backend,size_bytes,resolution,target_hz,frame_cap,received_frames,'
-                    'avg_latency_ms,min_latency_ms,max_latency_ms,std_dev_ms\n')
+                    'backend,size_bytes,resolution,target_hz,actual_pub_hz,actual_recv_hz,'
+                    'total_sent,received_frames,lost_frames,loss_pct,mean_latency_ms,'
+                    'min_latency_ms,p50_latency_ms,p95_latency_ms,p99_latency_ms,max_latency_ms,'
+                    'std_dev_ms,outliers_3sigma_count\n')
         except OSError:
             pass
 
 
-def print_csv_results(event, context):
+def print_csv_results(*args, **kwargs):
+    context = None
+    for a in args:
+        if hasattr(a, 'launch_configurations'):
+            context = a
+            break
+    if context is None:
+        return
+
     csv_file = context.launch_configurations.get('csv_path', '')
     if csv_file and os.path.exists(csv_file):
         try:
             with open(csv_file, 'r') as f:
-                content = f.read().strip()
-            if content:
-                print('\n' + '=' * 88)
-                print(' FINAL BENCHMARK RESULTS (CSV FORMAT):')
-                print('=' * 88)
-                print(content)
-                print('=' * 88)
+                reader = list(csv.DictReader(f))
+            if reader:
+                r = reader[-1]
+                print('\n' + '=' * 105)
+                print(f" BENCHMARK RESULTS: mode={r.get('backend','')} [{r.get('resolution','')} @ {r.get('target_hz','')} Hz]")
+                print('=' * 105)
+                print(f" {'Metric':<26} | {'Value'}")
+                print('-' * 105)
+                print(f" {'Actual Publishing Rate':<26} | {r.get('actual_pub_hz','')} Hz (Target: {r.get('target_hz','')} Hz)")
+                print(f" {'Actual Receiving Rate':<26} | {r.get('actual_recv_hz','')} Hz")
+                print(f" {'Measured Frames':<26} | {r.get('received_frames','')} (Total Sent: {r.get('total_sent','')})")
+                print(f" {'Lost Frames (Loss %)':<26} | {r.get('lost_frames','')} ({r.get('loss_pct','') }%)")
+                print('-' * 105)
+                print(f" {'P50 Latency (Median)':<26} | {r.get('p50_latency_ms','')} ms")
+                print(f" {'P95 Latency':<26} | {r.get('p95_latency_ms','')} ms")
+                print(f" {'P99 Latency':<26} | {r.get('p99_latency_ms','')} ms")
+                print(f" {'Mean Latency':<26} | {r.get('mean_latency_ms','')} ms")
+                print(f" {'Min Latency':<26} | {r.get('min_latency_ms','')} ms")
+                print(f" {'Max Latency':<26} | {r.get('max_latency_ms','')} ms")
+                print(f" {'Std Dev (Jitter)':<26} | {r.get('std_dev_ms','')} ms")
+                print(f" {'Outliers (> 3-sigma)':<26} | {r.get('outliers_3sigma_count','')} frames")
+                print('=' * 105)
                 print(f' Results saved to: {csv_file}\n')
         except OSError:
             pass
@@ -99,31 +125,49 @@ def generate_launch_description():
 
     # Resolve effective max messages
     effective_max_msgs = PythonExpression([
-        "int('", LaunchConfiguration('max_messages'), "') if '",
-        LaunchConfiguration('max_messages'), "'.strip() != '' else int('",
-        LaunchConfiguration('max_msgs'), "')"
+        "'", LaunchConfiguration('max_messages'), "' if '",
+        LaunchConfiguration('max_messages'), "' != '' else '",
+        LaunchConfiguration('max_msgs'), "'"
     ])
 
-    # Automatically enable auto_exit if max_msgs > 0 unless explicitly overridden
-    auto_exit_expr = PythonExpression([
-        "'true' if ('", LaunchConfiguration('auto_exit'),
-        "'.strip().lower() in ['true', '1'] if '",
-        LaunchConfiguration('auto_exit'), "'.strip() != '' else (int('",
-        LaunchConfiguration('max_messages'), "') > 0 if '",
-        LaunchConfiguration('max_messages'), "'.strip() != '' else int('",
-        LaunchConfiguration('max_msgs'), "') > 0)) else 'false'"
-    ])
-
-    # Boolean expression for mode: True for 'shared'/'shm'/'true', False for 'wire'/'cpu'/'false'
+    # True when mode is 'shared' or 'shm', False for 'wire' or 'cpu'
     use_shm = PythonExpression([
-        "'", LaunchConfiguration('mode'), "'.strip().lower() in ['shared', 'shm', 'true', '1']"
+        "'", LaunchConfiguration('mode'), "'.strip().lower() in ['shared', 'shmem', 'shm', 'true', '1']"
     ])
 
-    # 1. Publisher node
-    pub_node = Node(
+    # Auto exit expression: true if max_messages > 0
+    auto_exit_expr = PythonExpression([
+        "'", LaunchConfiguration('auto_exit'), "' if '",
+        LaunchConfiguration('auto_exit'), "' != '' else (",
+        "'true' if int('", effective_max_msgs, "') > 0 else 'false')"
+    ])
+
+    subscriber_node = Node(
+        package='shmem_bb_benchmark',
+        executable='shmem_image_subscriber_node',
+        name='image_subscriber',
+        output='screen',
+        parameters=[{
+            'topic': LaunchConfiguration('topic'),
+            'result_prefix': 'shmem_bench',
+            'use_shm': use_shm,
+            'require_shmem': use_shm,
+            'verify_content': True,
+            'publish_diagnostics': False,
+            'history_depth': LaunchConfiguration('history_depth'),
+            'max_messages': effective_max_msgs,
+            'warmup_messages': LaunchConfiguration('warmup_msgs'),
+            'target_hz': LaunchConfiguration('rate'),
+            'summary_csv_path': LaunchConfiguration('csv_path'),
+            'auto_exit': auto_exit_expr,
+        }],
+    )
+
+    publisher_node = Node(
         package='shmem_bb_benchmark',
         executable='shmem_image_publisher_node',
         name='image_publisher',
+        output='screen',
         parameters=[{
             'topic': LaunchConfiguration('topic'),
             'rate': LaunchConfiguration('rate'),
@@ -136,47 +180,28 @@ def generate_launch_description():
             'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'auto_exit': auto_exit_expr,
         }],
-        output='screen',
     )
 
-    # 2. Subscriber node
-    sub_node = Node(
-        package='shmem_bb_benchmark',
-        executable='shmem_image_subscriber_node',
-        name='image_subscriber',
-        parameters=[{
-            'topic': LaunchConfiguration('topic'),
-            'result_prefix': 'image_sub',
-            'use_shm': use_shm,
-            'require_shmem': use_shm,
-            'verify_content': True,
-            'max_messages': effective_max_msgs,
-            'warmup_messages': LaunchConfiguration('warmup_msgs'),
-            'history_depth': LaunchConfiguration('history_depth'),
-            'publish_diagnostics': False,
-            'target_hz': LaunchConfiguration('rate'),
-            'summary_csv_path': LaunchConfiguration('csv_path'),
-            'auto_exit': auto_exit_expr,
-        }],
-        output='screen',
+    delayed_publisher = TimerAction(
+        period=1.0,
+        actions=[publisher_node]
     )
 
-    # Delay publisher startup slightly so subscriber finishes DDS discovery
-    delayed_pub_node = TimerAction(
-        period=0.5,
-        actions=[pub_node],
-    )
-
-    # When publisher exits after max_msgs, allow 2.5s for subscriber to drain, then shut down
-    shutdown_on_pub_exit = RegisterEventHandler(
-        OnProcessExit(
-            target_action=pub_node,
+    # When subscriber exits, initiate clean shutdown and display CSV
+    exit_event_handler = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=subscriber_node,
             on_exit=[
-                TimerAction(
-                    period=2.5,
-                    actions=[EmitEvent(event=Shutdown(reason='Publisher finished publication'))],
-                ),
-            ],
+                EmitEvent(event=Shutdown(reason='Subscriber finished benchmark targets')),
+            ]
+        )
+    )
+
+    shutdown_event_handler = RegisterEventHandler(
+        event_handler=OnShutdown(
+            on_shutdown=[
+                OpaqueFunction(function=print_csv_results)
+            ]
         )
     )
 
@@ -193,8 +218,8 @@ def generate_launch_description():
         history_depth_arg,
         auto_exit_arg,
         OpaqueFunction(function=init_csv_file),
-        sub_node,
-        delayed_pub_node,
-        shutdown_on_pub_exit,
-        RegisterEventHandler(OnShutdown(on_shutdown=print_csv_results)),
+        subscriber_node,
+        delayed_publisher,
+        exit_event_handler,
+        shutdown_event_handler,
     ])

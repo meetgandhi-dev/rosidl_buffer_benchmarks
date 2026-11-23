@@ -45,8 +45,16 @@ def init_csv_file(context):
             pass
 
 
-def merge_and_print_csv_results(event, context):
+def merge_and_print_csv_results(*args, **kwargs):
     """Merge cuda and fallback results into a single comparison CSV and print summary."""
+    context = None
+    for a in args:
+        if hasattr(a, 'launch_configurations'):
+            context = a
+            break
+    if context is None:
+        return
+
     csv_file = context.launch_configurations.get('csv_path', '')
     if not csv_file:
         return
@@ -97,60 +105,128 @@ def merge_and_print_csv_results(event, context):
     target_hz = src.get('target_hz', context.launch_configurations.get('rate', ''))
     frame_cap = src.get('frame_cap', context.launch_configurations.get('max_msgs', ''))
 
+    actual_pub_hz = cuda_data.get('actual_pub_hz', src.get('actual_pub_hz', target_hz)) if cuda_data else '0.0'
+    cuda_recv_hz = cuda_data.get('actual_recv_hz', '0.0') if cuda_data else '0.0'
+    fallback_recv_hz = fallback_data.get('actual_recv_hz', '0.0') if fallback_data else '0.0'
+
     cuda_frames = cuda_data.get('received_frames', '0') if cuda_data else '0'
-    cuda_mean = float(cuda_data['avg_latency_ms']) if cuda_data and 'avg_latency_ms' in cuda_data else None
-    cuda_min = float(cuda_data['min_latency_ms']) if cuda_data and 'min_latency_ms' in cuda_data else None
-    cuda_max = float(cuda_data['max_latency_ms']) if cuda_data and 'max_latency_ms' in cuda_data else None
-    cuda_std = float(cuda_data['std_dev_ms']) if cuda_data and 'std_dev_ms' in cuda_data else None
+    fallback_frames = fallback_data.get('received_frames', '0') if fallback_data else '0'
 
-    fb_frames = fallback_data.get('received_frames', '0') if fallback_data else '0'
-    fb_mean = float(fallback_data['avg_latency_ms']) if fallback_data and 'avg_latency_ms' in fallback_data else None
-    fb_min = float(fallback_data['min_latency_ms']) if fallback_data and 'min_latency_ms' in fallback_data else None
-    fb_max = float(fallback_data['max_latency_ms']) if fallback_data and 'max_latency_ms' in fallback_data else None
-    fb_std = float(fallback_data['std_dev_ms']) if fallback_data and 'std_dev_ms' in fallback_data else None
+    cuda_lost = cuda_data.get('lost_frames', '0') if cuda_data else '0'
+    fallback_lost = fallback_data.get('lost_frames', '0') if fallback_data else '0'
 
-    speedup_str = 'N/A'
-    if cuda_mean is not None and fb_mean is not None and cuda_mean > 0:
-        ratio = fb_mean / cuda_mean
-        speedup_str = f'{ratio:.2f}x'
+    cuda_loss_pct = cuda_data.get('loss_pct', '0.0') if cuda_data else '0.0'
+    fallback_loss_pct = fallback_data.get('loss_pct', '0.0') if fallback_data else '0.0'
 
-    def fmt(v):
-        return f'{v:.3f}' if v is not None else 'N/A'
+    cuda_p50 = cuda_data.get('p50_latency_ms', '0.0') if cuda_data else '0.0'
+    fallback_p50 = fallback_data.get('p50_latency_ms', '0.0') if fallback_data else '0.0'
 
-    # Append row to final comparison CSV
+    cuda_p95 = cuda_data.get('p95_latency_ms', '0.0') if cuda_data else '0.0'
+    fallback_p95 = fallback_data.get('p95_latency_ms', '0.0') if fallback_data else '0.0'
+
+    cuda_p99 = cuda_data.get('p99_latency_ms', '0.0') if cuda_data else '0.0'
+    fallback_p99 = fallback_data.get('p99_latency_ms', '0.0') if fallback_data else '0.0'
+
+    cuda_mean = cuda_data.get('mean_latency_ms', cuda_data.get('avg_latency_ms', '0.0')) if cuda_data else '0.0'
+    fallback_mean = fallback_data.get('mean_latency_ms', fallback_data.get('avg_latency_ms', '0.0')) if fallback_data else '0.0'
+
+    cuda_min = cuda_data.get('min_latency_ms', '0.0') if cuda_data else '0.0'
+    fallback_min = fallback_data.get('min_latency_ms', '0.0') if fallback_data else '0.0'
+
+    cuda_max = cuda_data.get('max_latency_ms', '0.0') if cuda_data else '0.0'
+    fallback_max = fallback_data.get('max_latency_ms', '0.0') if fallback_data else '0.0'
+
+    cuda_std = cuda_data.get('std_dev_ms', '0.0') if cuda_data else '0.0'
+    fallback_std = fallback_data.get('std_dev_ms', '0.0') if fallback_data else '0.0'
+
+    cuda_outliers = cuda_data.get('outliers_3sigma_count', '0') if cuda_data else '0'
+    fallback_outliers = fallback_data.get('outliers_3sigma_count', '0') if fallback_data else '0'
+
+    def calc_speedup(fb_str, cuda_str):
+        try:
+            fb = float(fb_str)
+            cu = float(cuda_str)
+            if cu > 0.0:
+                return f'{fb / cu:.2f}x'
+        except (ValueError, TypeError):
+            pass
+        return 'N/A'
+
+    p50_speedup = calc_speedup(fallback_p50, cuda_p50)
+    p99_speedup = calc_speedup(fallback_p99, cuda_p99)
+    mean_speedup = calc_speedup(fallback_mean, cuda_mean)
+
+    merged_header = [
+        'resolution', 'size_bytes', 'target_hz', 'actual_pub_hz',
+        'cuda_recv_hz', 'fallback_recv_hz',
+        'cuda_frames', 'fallback_frames',
+        'cuda_loss_pct', 'fallback_loss_pct',
+        'cuda_p50_ms', 'fallback_p50_ms', 'p50_speedup',
+        'cuda_p95_ms', 'fallback_p95_ms',
+        'cuda_p99_ms', 'fallback_p99_ms', 'p99_speedup',
+        'cuda_mean_ms', 'fallback_mean_ms', 'mean_speedup',
+        'cuda_min_ms', 'fallback_min_ms',
+        'cuda_max_ms', 'fallback_max_ms',
+        'cuda_std_ms', 'fallback_std_ms',
+        'cuda_outliers', 'fallback_outliers',
+    ]
+
+    merged_row = [
+        resolution, size_bytes, target_hz, str(actual_pub_hz),
+        str(cuda_recv_hz), str(fallback_recv_hz),
+        str(cuda_frames), str(fallback_frames),
+        str(cuda_loss_pct), str(fallback_loss_pct),
+        str(cuda_p50), str(fallback_p50), p50_speedup,
+        str(cuda_p95), str(fallback_p95),
+        str(cuda_p99), str(fallback_p99), p99_speedup,
+        str(cuda_mean), str(fallback_mean), mean_speedup,
+        str(cuda_min), str(fallback_min),
+        str(cuda_max), str(fallback_max),
+        str(cuda_std), str(fallback_std),
+        str(cuda_outliers), str(fallback_outliers),
+    ]
+
+    file_exists = os.path.exists(csv_file) and os.path.getsize(csv_file) > 0
+    needs_header = True
+    if file_exists:
+        try:
+            with open(csv_file, 'r') as f:
+                first_line = f.readline()
+                if first_line.strip() == ','.join(merged_header):
+                    needs_header = False
+        except OSError:
+            pass
+
     try:
-        exists = os.path.exists(csv_file) and os.path.getsize(csv_file) > 0
-        with open(csv_file, 'a', newline='') as f:
-            writer = csv.writer(f)
-            if not exists:
-                writer.writerow([
-                    'resolution', 'size_bytes', 'target_hz', 'frame_cap',
-                    'cuda_received', 'cuda_mean_ms', 'cuda_min_ms', 'cuda_max_ms', 'cuda_std_ms',
-                    'fallback_received', 'fallback_mean_ms', 'fallback_min_ms', 'fallback_max_ms', 'fallback_std_ms',
-                    'speedup'
-                ])
-            writer.writerow([
-                resolution, size_bytes, target_hz, frame_cap,
-                cuda_frames, fmt(cuda_mean), fmt(cuda_min), fmt(cuda_max), fmt(cuda_std),
-                fb_frames, fmt(fb_mean), fmt(fb_min), fmt(fb_max), fmt(fb_std),
-                speedup_str
-            ])
-    except OSError:
-        pass
+        os.makedirs(os.path.dirname(os.path.abspath(csv_file)), exist_ok=True)
+        with open(csv_file, 'a' if file_exists and not needs_header else 'w') as f:
+            if needs_header:
+                f.write(','.join(merged_header) + '\n')
+            f.write(','.join(merged_row) + '\n')
+    except OSError as err:
+        print(f'Error writing merged CSV to {csv_file}: {err}')
 
-    # Print summary table to terminal
+    # Output formatted comparison table
     print('\n' + '=' * 105)
     print(f' CUDA ZERO-COPY vs CPU FALLBACK BENCHMARK SUMMARY  [{resolution} @ {target_hz} Hz]')
     print('=' * 105)
-    print(f' {"Metric":<26} | {"CUDA Zero-Copy":<20} | {"CPU Fallback (Wire)":<22} | {"Speedup":<12}')
+    print(f" {'Metric':<26} | {'CUDA (Zero-Copy)':<22} | {'Fallback (CPU / Wire)':<22} | {'Speedup / Ratio'}")
     print('-' * 105)
-    print(f' {"Frames Measured":<26} | {cuda_frames:<20} | {fb_frames:<22} |')
-    print(f' {"Mean Latency (ms)":<26} | {fmt(cuda_mean):<20} | {fmt(fb_mean):<22} | {speedup_str:<12}')
-    print(f' {"Min Latency (ms)":<26} | {fmt(cuda_min):<20} | {fmt(fb_min):<22} |')
-    print(f' {"Max Latency (ms)":<26} | {fmt(cuda_max):<20} | {fmt(fb_max):<22} |')
-    print(f' {"Std Dev (ms)":<26} | {fmt(cuda_std):<20} | {fmt(fb_std):<22} |')
+    print(f" {'Actual Publishing Rate':<26} | {actual_pub_hz + ' Hz':<22} | {actual_pub_hz + ' Hz':<22} | Target: {target_hz} Hz")
+    print(f" {'Actual Receiving Rate':<26} | {cuda_recv_hz + ' Hz':<22} | {fallback_recv_hz + ' Hz':<22} |")
+    print(f" {'Measured Frames':<26} | {cuda_frames:<22} | {fallback_frames:<22} |")
+    print(f" {'Lost Frames (Loss %)':<26} | {f'{cuda_lost} ({cuda_loss_pct}%)':<22} | {f'{fallback_lost} ({fallback_loss_pct}%)':<22} |")
+    print('-' * 105)
+    print(f" {'P50 Latency (Median)':<26} | {cuda_p50 + ' ms':<22} | {fallback_p50 + ' ms':<22} | {p50_speedup}")
+    print(f" {'P95 Latency':<26} | {cuda_p95 + ' ms':<22} | {fallback_p95 + ' ms':<22} |")
+    print(f" {'P99 Latency':<26} | {cuda_p99 + ' ms':<22} | {fallback_p99 + ' ms':<22} | {p99_speedup}")
+    print(f" {'Mean Latency':<26} | {cuda_mean + ' ms':<22} | {fallback_mean + ' ms':<22} | {mean_speedup}")
+    print(f" {'Min Latency':<26} | {cuda_min + ' ms':<22} | {fallback_min + ' ms':<22} |")
+    print(f" {'Max Latency':<26} | {cuda_max + ' ms':<22} | {fallback_max + ' ms':<22} |")
+    print(f" {'Std Dev (Jitter)':<26} | {cuda_std + ' ms':<22} | {fallback_std + ' ms':<22} |")
+    print(f" {'Outliers (> 3-sigma)':<26} | {cuda_outliers:<22} | {fallback_outliers:<22} |")
     print('=' * 105)
-    print(f' Results appended to: {csv_file}\n')
+    print(f' Results saved to: {csv_file}\n')
 
 
 def generate_launch_description():
@@ -185,7 +261,6 @@ def generate_launch_description():
         'cuda_device_id', default_value='0',
         description='CUDA GPU device ordinal')
 
-    # auto_exit: True when max_msgs > 0
     auto_exit_expr = PythonExpression([
         "'true' if int('", LaunchConfiguration('max_msgs'), "') > 0 else 'false'"
     ])
@@ -266,7 +341,6 @@ def generate_launch_description():
         actions=[publisher_node]
     )
 
-    # When fallback subscriber exits (usually last or equal), shut down
     exit_event_handler = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=fallback_subscriber_node,

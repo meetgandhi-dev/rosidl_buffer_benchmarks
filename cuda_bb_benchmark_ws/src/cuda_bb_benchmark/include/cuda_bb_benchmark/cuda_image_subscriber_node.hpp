@@ -17,6 +17,7 @@
 
 #include <cuda_runtime.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -78,6 +79,18 @@ private:
   std::string last_backend_{"cuda"};
   uint32_t last_width_{0};
   uint32_t last_height_{0};
+
+  // Frame and sequence tracking for drop detection
+  std::size_t last_seq_{0};
+  std::size_t first_bench_seq_{0};
+  std::size_t last_bench_seq_{0};
+  std::size_t dropped_frames_{0};
+
+  // Steady-clock throughput tracking
+  std::chrono::steady_clock::time_point sub_first_recv_time_{};
+  std::chrono::steady_clock::time_point sub_last_recv_time_{};
+  int64_t pub_first_stamp_ns_{0};
+  int64_t pub_last_stamp_ns_{0};
 };
 
 }  // namespace cuda_bb_benchmark

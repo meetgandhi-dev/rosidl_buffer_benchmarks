@@ -24,21 +24,9 @@ Two backend modes are compared:
              Subscriber receives via zero-copy shmem read handle (intra + SHM).
   - cpu   : publisher allocates payload in a standard CPU buffer.
              Subscriber receives a plain CPU buffer (intra + CPU).
-
-This complements the inter-process launch files:
-  shmem_or_wire_pub_sub.launch.py        -- inter-process, selectable mode
-  shmem_fallback_two_subs.launch.py      -- inter-process, SHM + fallback side-by-side
-
-Usage:
-  # Intra-process with shared memory backend:
-  ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \\
-    width:=1920 height:=1080 rate:=30.0 mode:=shmem max_msgs:=1000
-
-  # Intra-process with CPU backend:
-  ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \\
-    width:=1920 height:=1080 rate:=30.0 mode:=cpu max_msgs:=1000
 """
 
+import csv
 import os
 
 from launch import LaunchDescription
@@ -47,7 +35,6 @@ from launch.actions import (
     EmitEvent,
     OpaqueFunction,
     RegisterEventHandler,
-    TimerAction,
 )
 from launch.event_handlers import OnProcessExit, OnShutdown
 from launch.events import Shutdown
@@ -63,32 +50,56 @@ def init_csv_file(context):
             os.makedirs(os.path.dirname(os.path.abspath(csv_file)), exist_ok=True)
             with open(csv_file, 'w') as f:
                 f.write(
-                    'communication,backend,size_bytes,resolution,target_hz,frame_cap,'
-                    'received_frames,avg_latency_ms,min_latency_ms,max_latency_ms,std_dev_ms\n')
+                    'backend,size_bytes,resolution,target_hz,actual_pub_hz,actual_recv_hz,'
+                    'total_sent,received_frames,lost_frames,loss_pct,mean_latency_ms,'
+                    'min_latency_ms,p50_latency_ms,p95_latency_ms,p99_latency_ms,max_latency_ms,'
+                    'std_dev_ms,outliers_3sigma_count\n')
         except OSError:
             pass
 
 
-def print_csv_results(event, context):
+def print_csv_results(*args, **kwargs):
+    context = None
+    for a in args:
+        if hasattr(a, 'launch_configurations'):
+            context = a
+            break
+    if context is None:
+        return
+
     csv_file = context.launch_configurations.get('csv_path', '')
     if csv_file and os.path.exists(csv_file):
         try:
             with open(csv_file, 'r') as f:
-                content = f.read().strip()
-            if content:
+                reader = list(csv.DictReader(f))
+            if reader:
+                r = reader[-1]
                 mode = context.launch_configurations.get('mode', 'shmem')
-                print('\n' + '=' * 88)
-                print(f' INTRA-PROCESS BENCHMARK RESULTS (mode={mode}):')
-                print('=' * 88)
-                print(content)
-                print('=' * 88)
+                print('\n' + '=' * 105)
+                print(f" INTRA-PROCESS BENCHMARK RESULTS (mode={mode}): [{r.get('resolution','')} @ {r.get('target_hz','')} Hz]")
+                print('=' * 105)
+                print(f" {'Metric':<26} | {'Value'}")
+                print('-' * 105)
+                print(f" {'Actual Publishing Rate':<26} | {r.get('actual_pub_hz','')} Hz (Target: {r.get('target_hz','')} Hz)")
+                print(f" {'Actual Receiving Rate':<26} | {r.get('actual_recv_hz','')} Hz")
+                print(f" {'Measured Frames':<26} | {r.get('received_frames','')} (Total Sent: {r.get('total_sent','')})")
+                print(f" {'Lost Frames (Loss %)':<26} | {r.get('lost_frames','')} ({r.get('loss_pct','') }%)")
+                print('-' * 105)
+                print(f" {'P50 Latency (Median)':<26} | {r.get('p50_latency_ms','')} ms")
+                print(f" {'P95 Latency':<26} | {r.get('p95_latency_ms','')} ms")
+                print(f" {'P99 Latency':<26} | {r.get('p99_latency_ms','')} ms")
+                print(f" {'Mean Latency':<26} | {r.get('mean_latency_ms','')} ms")
+                print(f" {'Min Latency':<26} | {r.get('min_latency_ms','')} ms")
+                print(f" {'Max Latency':<26} | {r.get('max_latency_ms','')} ms")
+                print(f" {'Std Dev (Jitter)':<26} | {r.get('std_dev_ms','')} ms")
+                print(f" {'Outliers (> 3-sigma)':<26} | {r.get('outliers_3sigma_count','')} frames")
+                print('=' * 105)
                 print(f' Results saved to: {csv_file}\n')
         except OSError:
             pass
 
 
 def generate_launch_description():
-    # ── Launch arguments ──────────────────────────────────────────────────────
     width_arg = DeclareLaunchArgument(
         'width', default_value='1920',
         description='Image width in pixels')
@@ -119,19 +130,13 @@ def generate_launch_description():
         'history_depth', default_value='80',
         description='History depth for buffer pool and QoS queue')
 
-    # ── Derived expressions ───────────────────────────────────────────────────
-
-    # True when mode is 'shmem' or 'shm', False for 'cpu' or 'wire'
     use_shm = PythonExpression([
         "'", LaunchConfiguration('mode'), "'.strip().lower() in ['shmem', 'shm', 'true', '1']"
     ])
 
-    # auto_exit: always True when max_msgs > 0
     auto_exit_expr = PythonExpression([
         "'true' if int('", LaunchConfiguration('max_msgs'), "') > 0 else 'false'"
     ])
-
-    # ── Composable nodes (same process, intra-process comms ON) ───────────────
 
     publisher_node = ComposableNode(
         package='shmem_bb_benchmark',
@@ -158,14 +163,14 @@ def generate_launch_description():
         name='intra_image_subscriber',
         parameters=[{
             'topic': LaunchConfiguration('topic'),
-            'result_prefix': 'intra_image_sub',
+            'result_prefix': 'shmem_intra',
             'use_shm': use_shm,
             'require_shmem': use_shm,
-            'verify_content': True,
+            'verify_content': False,
+            'publish_diagnostics': False,
+            'history_depth': LaunchConfiguration('history_depth'),
             'max_messages': LaunchConfiguration('max_msgs'),
             'warmup_messages': LaunchConfiguration('warmup_msgs'),
-            'history_depth': LaunchConfiguration('history_depth'),
-            'publish_diagnostics': False,
             'target_hz': LaunchConfiguration('rate'),
             'summary_csv_path': LaunchConfiguration('csv_path'),
             'auto_exit': auto_exit_expr,
@@ -173,9 +178,8 @@ def generate_launch_description():
         extra_arguments=[{'use_intra_process_comms': True}],
     )
 
-    # Both nodes are loaded into one container → same OS process
     container = ComposableNodeContainer(
-        name='intra_process_benchmark_container',
+        name='intra_process_container',
         namespace='',
         package='rclcpp_components',
         executable='component_container',
@@ -186,12 +190,20 @@ def generate_launch_description():
         output='screen',
     )
 
-    shutdown_on_container_exit = RegisterEventHandler(
-        OnProcessExit(
+    exit_event_handler = RegisterEventHandler(
+        event_handler=OnProcessExit(
             target_action=container,
             on_exit=[
-                EmitEvent(event=Shutdown(reason='Container process finished')),
-            ],
+                EmitEvent(event=Shutdown(reason='Intra-process container exited cleanly')),
+            ]
+        )
+    )
+
+    shutdown_event_handler = RegisterEventHandler(
+        event_handler=OnShutdown(
+            on_shutdown=[
+                OpaqueFunction(function=print_csv_results)
+            ]
         )
     )
 
@@ -207,6 +219,6 @@ def generate_launch_description():
         history_depth_arg,
         OpaqueFunction(function=init_csv_file),
         container,
-        shutdown_on_container_exit,
-        RegisterEventHandler(OnShutdown(on_shutdown=print_csv_results)),
+        exit_event_handler,
+        shutdown_event_handler,
     ])

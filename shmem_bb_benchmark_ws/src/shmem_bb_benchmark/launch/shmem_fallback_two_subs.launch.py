@@ -45,8 +45,16 @@ def init_csv_file(context):
             pass
 
 
-def merge_and_print_csv_results(event, context):
+def merge_and_print_csv_results(*args, **kwargs):
     """Merge shmem and fallback results into a single comparison CSV and print summary."""
+    context = None
+    for a in args:
+        if hasattr(a, 'launch_configurations'):
+            context = a
+            break
+    if context is None:
+        return
+
     csv_file = context.launch_configurations.get('csv_path', '')
     if not csv_file:
         return
@@ -97,63 +105,86 @@ def merge_and_print_csv_results(event, context):
     target_hz = src.get('target_hz', context.launch_configurations.get('rate', ''))
     frame_cap = src.get('frame_cap', context.launch_configurations.get('max_msgs', ''))
 
-    shmem_frames = shmem_data.get('received_frames', '0') if shmem_data else '0'
-    shmem_avg = shmem_data.get('avg_latency_ms', '0.0') if shmem_data else '0.0'
-    shmem_min = shmem_data.get('min_latency_ms', '0.0') if shmem_data else '0.0'
-    shmem_max = shmem_data.get('max_latency_ms', '0.0') if shmem_data else '0.0'
-    shmem_std = shmem_data.get('std_dev_ms', '0.0') if shmem_data else '0.0'
+    actual_pub_hz = shmem_data.get('actual_pub_hz', src.get('actual_pub_hz', target_hz)) if shmem_data else '0.0'
+    shmem_recv_hz = shmem_data.get('actual_recv_hz', '0.0') if shmem_data else '0.0'
+    fallback_recv_hz = fallback_data.get('actual_recv_hz', '0.0') if fallback_data else '0.0'
 
+    shmem_frames = shmem_data.get('received_frames', '0') if shmem_data else '0'
     fallback_frames = fallback_data.get('received_frames', '0') if fallback_data else '0'
-    fallback_avg = fallback_data.get('avg_latency_ms', '0.0') if fallback_data else '0.0'
+
+    shmem_lost = shmem_data.get('lost_frames', '0') if shmem_data else '0'
+    fallback_lost = fallback_data.get('lost_frames', '0') if fallback_data else '0'
+
+    shmem_loss_pct = shmem_data.get('loss_pct', '0.0') if shmem_data else '0.0'
+    fallback_loss_pct = fallback_data.get('loss_pct', '0.0') if fallback_data else '0.0'
+
+    shmem_p50 = shmem_data.get('p50_latency_ms', '0.0') if shmem_data else '0.0'
+    fallback_p50 = fallback_data.get('p50_latency_ms', '0.0') if fallback_data else '0.0'
+
+    shmem_p95 = shmem_data.get('p95_latency_ms', '0.0') if shmem_data else '0.0'
+    fallback_p95 = fallback_data.get('p95_latency_ms', '0.0') if fallback_data else '0.0'
+
+    shmem_p99 = shmem_data.get('p99_latency_ms', '0.0') if shmem_data else '0.0'
+    fallback_p99 = fallback_data.get('p99_latency_ms', '0.0') if fallback_data else '0.0'
+
+    shmem_mean = shmem_data.get('mean_latency_ms', shmem_data.get('avg_latency_ms', '0.0')) if shmem_data else '0.0'
+    fallback_mean = fallback_data.get('mean_latency_ms', fallback_data.get('avg_latency_ms', '0.0')) if fallback_data else '0.0'
+
+    shmem_min = shmem_data.get('min_latency_ms', '0.0') if shmem_data else '0.0'
     fallback_min = fallback_data.get('min_latency_ms', '0.0') if fallback_data else '0.0'
+
+    shmem_max = shmem_data.get('max_latency_ms', '0.0') if shmem_data else '0.0'
     fallback_max = fallback_data.get('max_latency_ms', '0.0') if fallback_data else '0.0'
+
+    shmem_std = shmem_data.get('std_dev_ms', '0.0') if shmem_data else '0.0'
     fallback_std = fallback_data.get('std_dev_ms', '0.0') if fallback_data else '0.0'
 
-    diff_ms_str = 'N/A'
-    speedup_str = 'N/A'
-    diff_ms_val = 0.0
-    try:
-        shmem_avg_f = float(shmem_avg)
-        fallback_avg_f = float(fallback_avg)
-        diff_ms_val = fallback_avg_f - shmem_avg_f
-        diff_ms_str = f'{diff_ms_val:.3f}'
-        if shmem_avg_f > 0.0:
-            speedup_ratio = fallback_avg_f / shmem_avg_f
-            speedup_str = f'{speedup_ratio:.2f}x'
-    except (ValueError, TypeError):
-        pass
+    shmem_outliers = shmem_data.get('outliers_3sigma_count', '0') if shmem_data else '0'
+    fallback_outliers = fallback_data.get('outliers_3sigma_count', '0') if fallback_data else '0'
+
+    def calc_speedup(fb_str, shm_str):
+        try:
+            fb = float(fb_str)
+            shm = float(shm_str)
+            if shm > 0.0:
+                return f'{fb / shm:.2f}x'
+        except (ValueError, TypeError):
+            pass
+        return 'N/A'
+
+    p50_speedup = calc_speedup(fallback_p50, shmem_p50)
+    p99_speedup = calc_speedup(fallback_p99, shmem_p99)
+    mean_speedup = calc_speedup(fallback_mean, shmem_mean)
 
     merged_header = [
-        'resolution', 'size_bytes', 'target_hz', 'frame_cap',
+        'resolution', 'size_bytes', 'target_hz', 'actual_pub_hz',
+        'shmem_recv_hz', 'fallback_recv_hz',
         'shmem_frames', 'fallback_frames',
-        'shmem_avg_latency_ms', 'fallback_avg_latency_ms',
-        'latency_diff_ms', 'speedup',
-        'shmem_min_latency_ms', 'fallback_min_latency_ms',
-        'shmem_max_latency_ms', 'fallback_max_latency_ms',
-        'shmem_std_dev_ms', 'fallback_std_dev_ms',
+        'shmem_loss_pct', 'fallback_loss_pct',
+        'shmem_p50_ms', 'fallback_p50_ms', 'p50_speedup',
+        'shmem_p95_ms', 'fallback_p95_ms',
+        'shmem_p99_ms', 'fallback_p99_ms', 'p99_speedup',
+        'shmem_mean_ms', 'fallback_mean_ms', 'mean_speedup',
+        'shmem_min_ms', 'fallback_min_ms',
+        'shmem_max_ms', 'fallback_max_ms',
+        'shmem_std_ms', 'fallback_std_ms',
+        'shmem_outliers', 'fallback_outliers',
     ]
 
     merged_row = [
-        resolution,
-        size_bytes,
-        target_hz,
-        frame_cap,
-        shmem_frames,
-        fallback_frames,
-        shmem_avg,
-        fallback_avg,
-        diff_ms_str,
-        speedup_str,
-        shmem_min,
-        fallback_min,
-        shmem_max,
-        fallback_max,
-        shmem_std,
-        fallback_std,
+        resolution, size_bytes, target_hz, str(actual_pub_hz),
+        str(shmem_recv_hz), str(fallback_recv_hz),
+        str(shmem_frames), str(fallback_frames),
+        str(shmem_loss_pct), str(fallback_loss_pct),
+        str(shmem_p50), str(fallback_p50), p50_speedup,
+        str(shmem_p95), str(fallback_p95),
+        str(shmem_p99), str(fallback_p99), p99_speedup,
+        str(shmem_mean), str(fallback_mean), mean_speedup,
+        str(shmem_min), str(fallback_min),
+        str(shmem_max), str(fallback_max),
+        str(shmem_std), str(fallback_std),
+        str(shmem_outliers), str(fallback_outliers),
     ]
-
-    header_str = ','.join(merged_header) + '\n'
-    row_str = ','.join(merged_row) + '\n'
 
     file_exists = os.path.exists(csv_file) and os.path.getsize(csv_file) > 0
     needs_header = True
@@ -170,39 +201,31 @@ def merge_and_print_csv_results(event, context):
         os.makedirs(os.path.dirname(os.path.abspath(csv_file)), exist_ok=True)
         with open(csv_file, 'a' if file_exists and not needs_header else 'w') as f:
             if needs_header:
-                f.write(header_str)
-            f.write(row_str)
+                f.write(','.join(merged_header) + '\n')
+            f.write(','.join(merged_row) + '\n')
     except OSError as err:
         print(f'Error writing merged CSV to {csv_file}: {err}')
 
-    # Output formatted comparison table and merged CSV to console
-    print('\n' + '=' * 88)
-    print(' FINAL BENCHMARK COMPARISON RESULTS (2 SUBSCRIBERS: SHMEM vs FALLBACK):')
-    print('=' * 88)
-    print(f' Resolution       : {resolution} ({size_bytes} Bytes)')
-    print(f' Target Rate      : {target_hz} Hz (Frame Cap: {frame_cap})')
-    print('-' * 88)
-    print(f" {'Metric':<22} | {'SHMEM (Zero-Copy)':<26} | {'Fallback (CPU / Wire)'}")
-    print('-' * 88)
-    print(f" {'Received Frames':<22} | {shmem_frames:<26} | {fallback_frames}")
-    print(f" {'Avg Latency':<22} | {shmem_avg + ' ms':<26} | {fallback_avg + ' ms'}")
-    print(f" {'Min Latency':<22} | {shmem_min + ' ms':<26} | {fallback_min + ' ms'}")
-    print(f" {'Max Latency':<22} | {shmem_max + ' ms':<26} | {fallback_max + ' ms'}")
-    print(f" {'Std Dev':<22} | {shmem_std + ' ms':<26} | {fallback_std + ' ms'}")
-    print('-' * 88)
-    if speedup_str != 'N/A' and diff_ms_val >= 0:
-        print(f' Comparison       : SHMEM is {speedup_str} faster (-{diff_ms_str} ms latency)')
-    elif speedup_str != 'N/A':
-        print(f' Comparison       : SHMEM is {speedup_str} (latency difference: {diff_ms_str} ms)')
-    print('=' * 88)
-    print(' MERGED CSV OUTPUT:')
-    print('=' * 88)
-    try:
-        with open(csv_file, 'r') as f:
-            print(f.read().strip())
-    except OSError:
-        print(row_str.strip())
-    print('=' * 88)
+    # Output formatted comparison table
+    print('\n' + '=' * 105)
+    print(f' ZERO-COPY SHMEM vs CPU FALLBACK BENCHMARK SUMMARY  [{resolution} @ {target_hz} Hz]')
+    print('=' * 105)
+    print(f" {'Metric':<26} | {'SHMEM (Zero-Copy)':<22} | {'Fallback (CPU / Wire)':<22} | {'Speedup / Ratio'}")
+    print('-' * 105)
+    print(f" {'Actual Publishing Rate':<26} | {actual_pub_hz + ' Hz':<22} | {actual_pub_hz + ' Hz':<22} | Target: {target_hz} Hz")
+    print(f" {'Actual Receiving Rate':<26} | {shmem_recv_hz + ' Hz':<22} | {fallback_recv_hz + ' Hz':<22} |")
+    print(f" {'Measured Frames':<26} | {shmem_frames:<22} | {fallback_frames:<22} |")
+    print(f" {'Lost Frames (Loss %)':<26} | {f'{shmem_lost} ({shmem_loss_pct}%)':<22} | {f'{fallback_lost} ({fallback_loss_pct}%)':<22} |")
+    print('-' * 105)
+    print(f" {'P50 Latency (Median)':<26} | {shmem_p50 + ' ms':<22} | {fallback_p50 + ' ms':<22} | {p50_speedup}")
+    print(f" {'P95 Latency':<26} | {shmem_p95 + ' ms':<22} | {fallback_p95 + ' ms':<22} |")
+    print(f" {'P99 Latency':<26} | {shmem_p99 + ' ms':<22} | {fallback_p99 + ' ms':<22} | {p99_speedup}")
+    print(f" {'Mean Latency':<26} | {shmem_mean + ' ms':<22} | {fallback_mean + ' ms':<22} | {mean_speedup}")
+    print(f" {'Min Latency':<26} | {shmem_min + ' ms':<22} | {fallback_min + ' ms':<22} |")
+    print(f" {'Max Latency':<26} | {shmem_max + ' ms':<22} | {fallback_max + ' ms':<22} |")
+    print(f" {'Std Dev (Jitter)':<26} | {shmem_std + ' ms':<22} | {fallback_std + ' ms':<22} |")
+    print(f" {'Outliers (> 3-sigma)':<26} | {shmem_outliers:<22} | {fallback_outliers:<22} |")
+    print('=' * 105)
     print(f' Results saved to: {csv_file}\n')
 
 
@@ -229,10 +252,10 @@ def generate_launch_description():
 
     # Output and runtime configuration
     csv_path_arg = DeclareLaunchArgument(
-        'csv_path', default_value='/tmp/shmem_fallback_results.csv',
-        description='Path to save output merged comparison CSV results')
+        'csv_path', default_value='/tmp/shmem_fallback_comparison.csv',
+        description='Path to save output comparison CSV results')
     topic_arg = DeclareLaunchArgument(
-        'topic', default_value='image_test',
+        'topic', default_value='test_shmem_image',
         description='Topic name for image streaming')
     history_depth_arg = DeclareLaunchArgument(
         'history_depth', default_value='80',
@@ -240,29 +263,82 @@ def generate_launch_description():
     auto_exit_arg = DeclareLaunchArgument(
         'auto_exit', default_value='',
         description='Whether nodes should automatically exit (default: true when max_msgs > 0)')
+    verify_content_arg = DeclareLaunchArgument(
+        'verify_content', default_value='true',
+        description='Whether subscribers verify pixel payload byte patterns')
 
     # Resolve effective max messages
     effective_max_msgs = PythonExpression([
-        "int('", LaunchConfiguration('max_messages'), "') if '",
-        LaunchConfiguration('max_messages'), "'.strip() != '' else int('",
-        LaunchConfiguration('max_msgs'), "')"
+        "'", LaunchConfiguration('max_messages'), "' if '",
+        LaunchConfiguration('max_messages'), "' != '' else '",
+        LaunchConfiguration('max_msgs'), "'"
     ])
 
-    # Automatically enable auto_exit if max_msgs > 0 unless explicitly overridden
+    # Auto exit expression: true if max_messages > 0
     auto_exit_expr = PythonExpression([
-        "'true' if ('", LaunchConfiguration('auto_exit'),
-        "'.strip().lower() in ['true', '1'] if '",
-        LaunchConfiguration('auto_exit'), "'.strip() != '' else (int('",
-        LaunchConfiguration('max_messages'), "') > 0 if '",
-        LaunchConfiguration('max_messages'), "'.strip() != '' else int('",
-        LaunchConfiguration('max_msgs'), "') > 0)) else 'false'"
+        "'", LaunchConfiguration('auto_exit'), "' if '",
+        LaunchConfiguration('auto_exit'), "' != '' else (",
+        "'true' if int('", effective_max_msgs, "') > 0 else 'false')"
     ])
 
-    # 1. Shared-memory publisher node
-    pub_node = Node(
+    verify_content_expr = PythonExpression([
+        "'", LaunchConfiguration('verify_content'), "'.strip().lower() in ['true', '1', 'yes']"
+    ])
+
+    # Temporary CSV paths for the two individual subscriber nodes
+    shmem_tmp_csv = PythonExpression(["'", LaunchConfiguration('csv_path'), ".shmem.tmp'"])
+    fallback_tmp_csv = PythonExpression(["'", LaunchConfiguration('csv_path'), ".fallback.tmp'"])
+
+    # 1. Subscriber 1: Zero-Copy Shared Memory Subscriber
+    subscriber_shared = Node(
+        package='shmem_bb_benchmark',
+        executable='shmem_image_subscriber_node',
+        name='subscriber_shared',
+        output='screen',
+        parameters=[{
+            'topic': LaunchConfiguration('topic'),
+            'result_prefix': 'sub_shared',
+            'use_shm': True,
+            'require_shmem': True,
+            'verify_content': verify_content_expr,
+            'publish_diagnostics': False,
+            'history_depth': LaunchConfiguration('history_depth'),
+            'max_messages': effective_max_msgs,
+            'warmup_messages': LaunchConfiguration('warmup_msgs'),
+            'target_hz': LaunchConfiguration('rate'),
+            'summary_csv_path': shmem_tmp_csv,
+            'auto_exit': auto_exit_expr,
+        }],
+    )
+
+    # 2. Subscriber 2: Fallback Wire (CPU copy) Subscriber
+    subscriber_fallback = Node(
+        package='shmem_bb_benchmark',
+        executable='shmem_image_subscriber_node',
+        name='subscriber_fallback',
+        output='screen',
+        parameters=[{
+            'topic': LaunchConfiguration('topic'),
+            'result_prefix': 'sub_fallback',
+            'use_shm': False,
+            'require_shmem': False,
+            'verify_content': verify_content_expr,
+            'publish_diagnostics': False,
+            'history_depth': LaunchConfiguration('history_depth'),
+            'max_messages': effective_max_msgs,
+            'warmup_messages': LaunchConfiguration('warmup_msgs'),
+            'target_hz': LaunchConfiguration('rate'),
+            'summary_csv_path': fallback_tmp_csv,
+            'auto_exit': auto_exit_expr,
+        }],
+    )
+
+    # 3. Publisher: Shared Memory Publisher
+    publisher = Node(
         package='shmem_bb_benchmark',
         executable='shmem_image_publisher_node',
         name='publisher_shared',
+        output='screen',
         parameters=[{
             'topic': LaunchConfiguration('topic'),
             'rate': LaunchConfiguration('rate'),
@@ -275,73 +351,27 @@ def generate_launch_description():
             'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'auto_exit': auto_exit_expr,
         }],
-        output='screen',
     )
 
-    # 2. Shared-memory subscriber node (zero-copy POSIX shared memory)
-    sub_shared_node = Node(
-        package='shmem_bb_benchmark',
-        executable='shmem_image_subscriber_node',
-        name='subscriber_shared',
-        parameters=[{
-            'topic': LaunchConfiguration('topic'),
-            'result_prefix': 'sub_shared',
-            'use_shm': True,
-            'require_shmem': True,
-            'verify_content': True,
-            'max_messages': effective_max_msgs,
-            'warmup_messages': LaunchConfiguration('warmup_msgs'),
-            'history_depth': LaunchConfiguration('history_depth'),
-            'publish_diagnostics': False,
-            'target_hz': LaunchConfiguration('rate'),
-            'summary_csv_path': PythonExpression([
-                "'", LaunchConfiguration('csv_path'), ".shmem.tmp'"
-            ]),
-            'auto_exit': auto_exit_expr,
-        }],
-        output='screen',
+    delayed_publisher = TimerAction(
+        period=1.0,
+        actions=[publisher]
     )
 
-    # 3. Fallback / wire subscriber node (standard DDS CDR serialized copy)
-    sub_fallback_node = Node(
-        package='shmem_bb_benchmark',
-        executable='shmem_image_subscriber_node',
-        name='subscriber_fallback',
-        parameters=[{
-            'topic': LaunchConfiguration('topic'),
-            'result_prefix': 'sub_fallback',
-            'use_shm': False,
-            'require_shmem': False,
-            'verify_content': True,
-            'max_messages': effective_max_msgs,
-            'warmup_messages': LaunchConfiguration('warmup_msgs'),
-            'history_depth': LaunchConfiguration('history_depth'),
-            'publish_diagnostics': False,
-            'target_hz': LaunchConfiguration('rate'),
-            'summary_csv_path': PythonExpression([
-                "'", LaunchConfiguration('csv_path'), ".fallback.tmp'"
-            ]),
-            'auto_exit': auto_exit_expr,
-        }],
-        output='screen',
-    )
-
-    # Delay publisher startup slightly so both subscribers finish DDS discovery
-    delayed_pub_node = TimerAction(
-        period=0.5,
-        actions=[pub_node],
-    )
-
-    # When publisher exits after max_msgs, allow 2.5s for subscribers to drain, then shut down
-    shutdown_on_pub_exit = RegisterEventHandler(
-        OnProcessExit(
-            target_action=pub_node,
+    exit_event_handler = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=subscriber_fallback,
             on_exit=[
-                TimerAction(
-                    period=2.5,
-                    actions=[EmitEvent(event=Shutdown(reason='Publisher finished publication'))],
-                ),
-            ],
+                EmitEvent(event=Shutdown(reason='Fallback subscriber finished benchmark targets')),
+            ]
+        )
+    )
+
+    shutdown_event_handler = RegisterEventHandler(
+        event_handler=OnShutdown(
+            on_shutdown=[
+                OpaqueFunction(function=merge_and_print_csv_results)
+            ]
         )
     )
 
@@ -356,10 +386,11 @@ def generate_launch_description():
         topic_arg,
         history_depth_arg,
         auto_exit_arg,
+        verify_content_arg,
         OpaqueFunction(function=init_csv_file),
-        sub_shared_node,
-        sub_fallback_node,
-        delayed_pub_node,
-        shutdown_on_pub_exit,
-        RegisterEventHandler(OnShutdown(on_shutdown=merge_and_print_csv_results)),
+        subscriber_shared,
+        subscriber_fallback,
+        delayed_publisher,
+        exit_event_handler,
+        shutdown_event_handler,
     ])
