@@ -65,7 +65,20 @@ colcon build --packages-select shmem_buffer_backend_test
    **Merged CSV Schema**:
    `resolution,size_bytes,target_hz,frame_cap,shmem_frames,fallback_frames,shmem_avg_latency_ms,fallback_avg_latency_ms,latency_diff_ms,speedup,shmem_min_latency_ms,fallback_min_latency_ms,shmem_max_latency_ms,fallback_max_latency_ms,shmem_std_dev_ms,fallback_std_dev_ms`
 
-2. **Selectable Mode Pub/Sub (Shared vs Wire)**:
+2. **Intra-Process Comparison (SHM vs CPU, same process)**:
+   Runs both publisher and subscriber **inside the same OS process** using `ComposableNodeContainer` with `use_intra_process_comms: True`. The message `shared_ptr` is delivered directly — no serialization, no DDS, no inter-process copy. Compares SHM vs CPU backends purely at the intra-process level:
+   ```bash
+   source install/setup.bash
+   # Intra-process with shared memory backend:
+   ros2 launch shmem_buffer_backend_test intra_process_pub_sub.launch.py \
+     width:=1920 height:=1080 rate:=30.0 mode:=shmem max_msgs:=1000
+
+   # Intra-process with CPU backend:
+   ros2 launch shmem_buffer_backend_test intra_process_pub_sub.launch.py \
+     width:=1920 height:=1080 rate:=30.0 mode:=cpu max_msgs:=1000
+   ```
+
+3. **Selectable Mode Pub/Sub (Shared vs Wire)**:
    Runs 2 nodes (1 publisher and 1 subscriber) in either `shared` (zero-copy SHM) or `wire` (standard DDS CPU copy) mode. Automatically runs for `max_msgs` frames (default: 1000) and displays final results in CSV format:
    ```bash
    source install/setup.bash
