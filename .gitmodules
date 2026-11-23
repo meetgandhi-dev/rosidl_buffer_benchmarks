@@ -2,7 +2,3 @@
 	path = shmem_bb_benchmark_ws/src/shmem_buffer_backend
 	url = https://github.com/dskkato/shmem_buffer_backend.git
 	branch = lyrical
-[submodule "shmem_buffer_backend_benchmark"]
-	path = shmem_buffer_backend_benchmark
-	url = https://github.com/dskkato/shmem_buffer_backend_benchmark.git
-	branch = develop
