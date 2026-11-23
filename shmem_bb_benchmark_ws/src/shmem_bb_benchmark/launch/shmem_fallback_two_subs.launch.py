@@ -223,6 +223,9 @@ def generate_launch_description():
     max_messages_alias_arg = DeclareLaunchArgument(
         'max_messages', default_value='',
         description='Alias for max_msgs')
+    warmup_msgs_arg = DeclareLaunchArgument(
+        'warmup_msgs', default_value='10',
+        description='Number of warm-up messages to ignore during setup (default: 10)')
 
     # Output and runtime configuration
     csv_path_arg = DeclareLaunchArgument(
@@ -269,6 +272,7 @@ def generate_launch_description():
             'wait_for_subscriber': True,
             'history_depth': LaunchConfiguration('history_depth'),
             'max_messages': effective_max_msgs,
+            'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'auto_exit': auto_exit_expr,
         }],
         output='screen',
@@ -286,6 +290,7 @@ def generate_launch_description():
             'require_shmem': True,
             'verify_content': True,
             'max_messages': effective_max_msgs,
+            'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'history_depth': LaunchConfiguration('history_depth'),
             'publish_diagnostics': False,
             'target_hz': LaunchConfiguration('rate'),
@@ -309,6 +314,7 @@ def generate_launch_description():
             'require_shmem': False,
             'verify_content': True,
             'max_messages': effective_max_msgs,
+            'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'history_depth': LaunchConfiguration('history_depth'),
             'publish_diagnostics': False,
             'target_hz': LaunchConfiguration('rate'),
@@ -345,6 +351,7 @@ def generate_launch_description():
         rate_arg,
         max_msgs_arg,
         max_messages_alias_arg,
+        warmup_msgs_arg,
         csv_path_arg,
         topic_arg,
         history_depth_arg,

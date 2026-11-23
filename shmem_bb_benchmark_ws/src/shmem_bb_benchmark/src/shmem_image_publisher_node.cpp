@@ -35,6 +35,7 @@ ShmemImagePublisherNode::ShmemImagePublisherNode(const rclcpp::NodeOptions & opt
   const int default_history = std::max(80, static_cast<int>(publish_rate_hz_ * 2.5));
   history_depth_ = declare_parameter<int>("history_depth", default_history);
   max_messages_ = declare_parameter<int>("max_messages", 0);
+  warmup_messages_ = declare_parameter<int>("warmup_messages", 10);
   wait_for_subscriber_ = declare_parameter<bool>("wait_for_subscriber", false);
   auto_exit_ = declare_parameter<bool>("auto_exit", false);
   use_shm_ = declare_parameter<bool>("use_shm", true);
@@ -49,15 +50,19 @@ ShmemImagePublisherNode::ShmemImagePublisherNode(const rclcpp::NodeOptions & opt
 
   RCLCPP_INFO(
     get_logger(),
-    "ShmemImagePublisherNode initialized: topic='%s', rate=%.1f Hz, res=%dx%d, history_depth=%d",
-    topic_name_.c_str(), publish_rate_hz_, image_width_, image_height_, history_depth_);
+    "ShmemImagePublisherNode initialized: topic='%s', rate=%.1f Hz, res=%dx%d, max_msgs=%d, warmup_msgs=%d, history_depth=%d",
+    topic_name_.c_str(), publish_rate_hz_, image_width_, image_height_, max_messages_, warmup_messages_, history_depth_);
 }
 
 void ShmemImagePublisherNode::publish_timer_callback()
 {
-  if (max_messages_ > 0 && static_cast<int>(sequence_) >= max_messages_) {
+  const int total_messages = (max_messages_ > 0) ? (max_messages_ + warmup_messages_) : 0;
+  if (total_messages > 0 && static_cast<int>(sequence_) >= total_messages) {
     timer_->cancel();
-    RCLCPP_INFO(get_logger(), "Finished publishing %zu messages. Stopping.", sequence_);
+    RCLCPP_INFO(
+      get_logger(),
+      "Finished publishing %zu messages (%d warm-up + %d benchmark). Stopping.",
+      sequence_, warmup_messages_, max_messages_);
     if (auto_exit_ && !shutdown_timer_) {
       shutdown_timer_ = create_wall_timer(
         std::chrono::milliseconds(2000),
@@ -113,11 +118,23 @@ void ShmemImagePublisherNode::publish_timer_callback()
   count_msg.data = static_cast<std::uint32_t>(sequence_);
   count_publisher_->publish(count_msg);
 
-  RCLCPP_INFO_THROTTLE(
-    get_logger(), *get_clock(), 1000,
-    "Published msg #%zu (%zux%zu, %zu B, backend: %s)",
-    sequence_, static_cast<std::size_t>(image_width_), static_cast<std::size_t>(image_height_),
-    payload_size, message_history_.back().data.get_backend_type().c_str());
+  const bool is_warmup = (warmup_messages_ > 0 && static_cast<int>(sequence_) <= warmup_messages_);
+  if (is_warmup) {
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "Published msg #%zu [WARM-UP %zu/%d] (%zux%zu, %zu B, backend: %s)",
+      sequence_, sequence_, warmup_messages_,
+      static_cast<std::size_t>(image_width_), static_cast<std::size_t>(image_height_),
+      payload_size, message_history_.back().data.get_backend_type().c_str());
+  } else {
+    const std::size_t bench_idx = (warmup_messages_ > 0) ? (sequence_ - warmup_messages_) : sequence_;
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "Published msg #%zu [BENCHMARK %zu/%d] (%zux%zu, %zu B, backend: %s)",
+      sequence_, bench_idx, max_messages_,
+      static_cast<std::size_t>(image_width_), static_cast<std::size_t>(image_height_),
+      payload_size, message_history_.back().data.get_backend_type().c_str());
+  }
 }
 
 }  // namespace shmem_bb_benchmark

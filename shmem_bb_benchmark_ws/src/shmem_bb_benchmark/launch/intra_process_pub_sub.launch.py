@@ -106,6 +106,9 @@ def generate_launch_description():
     max_msgs_arg = DeclareLaunchArgument(
         'max_msgs', default_value='1000',
         description='Number of messages to publish/receive (0 = continuous)')
+    warmup_msgs_arg = DeclareLaunchArgument(
+        'warmup_msgs', default_value='10',
+        description='Number of warm-up messages to ignore during setup (default: 10)')
     csv_path_arg = DeclareLaunchArgument(
         'csv_path', default_value='/tmp/intra_process_results.csv',
         description='Path to save output summary CSV results')
@@ -143,6 +146,7 @@ def generate_launch_description():
             'wait_for_subscriber': True,
             'history_depth': LaunchConfiguration('history_depth'),
             'max_messages': LaunchConfiguration('max_msgs'),
+            'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'auto_exit': auto_exit_expr,
         }],
         extra_arguments=[{'use_intra_process_comms': True}],
@@ -159,6 +163,7 @@ def generate_launch_description():
             'require_shmem': use_shm,
             'verify_content': True,
             'max_messages': LaunchConfiguration('max_msgs'),
+            'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'history_depth': LaunchConfiguration('history_depth'),
             'publish_diagnostics': False,
             'target_hz': LaunchConfiguration('rate'),
@@ -187,6 +192,7 @@ def generate_launch_description():
         rate_arg,
         mode_arg,
         max_msgs_arg,
+        warmup_msgs_arg,
         csv_path_arg,
         topic_arg,
         history_depth_arg,

@@ -54,6 +54,7 @@ private:
   std::string encoding_{"mono8"};
   int history_depth_{20};
   int max_messages_{0};
+  int warmup_messages_{10};
   bool wait_for_subscriber_{false};
   bool auto_exit_{false};
   bool use_shm_{true};

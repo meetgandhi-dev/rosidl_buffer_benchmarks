@@ -44,6 +44,7 @@ ShmemImageSubscriberNode::ShmemImageSubscriberNode(const rclcpp::NodeOptions & o
   verify_content_ = declare_parameter<bool>("verify_content", true);
   publish_diagnostics_ = declare_parameter<bool>("publish_diagnostics", true);
   max_messages_ = declare_parameter<int>("max_messages", 0);
+  warmup_messages_ = declare_parameter<int>("warmup_messages", 10);
   auto_exit_ = declare_parameter<bool>("auto_exit", false);
   target_hz_ = declare_parameter<double>("target_hz", 0.0);
   latency_csv_path_ = declare_parameter<std::string>("latency_csv_path", "");
@@ -75,12 +76,12 @@ ShmemImageSubscriberNode::ShmemImageSubscriberNode(const rclcpp::NodeOptions & o
     watchdog_timer_ = create_wall_timer(
       std::chrono::milliseconds(500),
       [this]() {
-        if (received_count_ > 0 && max_messages_ > 0) {
+        if (!latencies_ms_.empty() && max_messages_ > 0) {
           if (subscription_->get_publisher_count() == 0u) {
             RCLCPP_INFO(
               get_logger(),
-              "Publisher disconnected. Finalizing subscriber with %zu frames.",
-              received_count_);
+              "Publisher disconnected. Finalizing subscriber with %zu measured frames (%zu total received).",
+              latencies_ms_.size(), received_count_);
             write_summary_report(last_backend_, last_width_, last_height_);
             if (auto_exit_) {
               watchdog_timer_->cancel();
@@ -93,8 +94,9 @@ ShmemImageSubscriberNode::ShmemImageSubscriberNode(const rclcpp::NodeOptions & o
 
   RCLCPP_INFO(
     get_logger(),
-    "ShmemImageSubscriberNode initialized: topic='%s', require_shmem=%s, verify_content=%s",
-    topic_name_.c_str(), require_shmem_ ? "true" : "false",
+    "ShmemImageSubscriberNode initialized: topic='%s', max_msgs=%d, warmup_msgs=%d, require_shmem=%s, verify_content=%s",
+    topic_name_.c_str(), max_messages_, warmup_messages_,
+    require_shmem_ ? "true" : "false",
     verify_content_ ? "true" : "false");
 }
 
@@ -168,14 +170,25 @@ void ShmemImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShar
   }
 
   const double latency_ms = (now() - msg->header.stamp).seconds() * 1000.0;
-  latencies_ms_.push_back(latency_ms);
+  const bool is_warmup = (warmup_messages_ > 0 && static_cast<int>(received_count_) <= warmup_messages_);
 
-  RCLCPP_INFO_THROTTLE(
-    get_logger(), *get_clock(), 1000,
-    "Received msg #%zu (%zux%zu, %zu B, backend: '%s', latency: %.2f ms, valid: %s)",
-    received_count_, static_cast<std::size_t>(msg->width),
-    static_cast<std::size_t>(msg->height), msg->data.size(), backend.c_str(),
-    latency_ms, (backend_valid && content_valid) ? "YES" : "NO");
+  if (is_warmup) {
+    RCLCPP_INFO(
+      get_logger(),
+      "Received warm-up msg #%zu/%d (%zux%zu, %zu B, backend: '%s', latency: %.2f ms, valid: %s) [ignored for benchmark]",
+      received_count_, warmup_messages_, static_cast<std::size_t>(msg->width),
+      static_cast<std::size_t>(msg->height), msg->data.size(), backend.c_str(),
+      latency_ms, (backend_valid && content_valid) ? "YES" : "NO");
+  } else {
+    latencies_ms_.push_back(latency_ms);
+    const std::size_t bench_idx = latencies_ms_.size();
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "Received msg #%zu [BENCHMARK %zu/%d] (%zux%zu, %zu B, backend: '%s', latency: %.2f ms, valid: %s)",
+      received_count_, bench_idx, max_messages_, static_cast<std::size_t>(msg->width),
+      static_cast<std::size_t>(msg->height), msg->data.size(), backend.c_str(),
+      latency_ms, (backend_valid && content_valid) ? "YES" : "NO");
+  }
 
   if (publish_diagnostics_) {
     std_msgs::msg::UInt32 count_msg;
@@ -195,10 +208,12 @@ void ShmemImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShar
     all_valid_pub_->publish(all_msg);
   }
 
+  const int total_expected = (max_messages_ > 0) ? (max_messages_ + warmup_messages_) : 0;
   const bool is_complete =
     (max_messages_ > 0 &&
-    (static_cast<int>(received_count_) >= max_messages_ ||
-     seq >= static_cast<std::size_t>(max_messages_)));
+    (static_cast<int>(latencies_ms_.size()) >= max_messages_ ||
+     static_cast<int>(received_count_) >= total_expected ||
+     seq >= static_cast<std::size_t>(total_expected)));
 
   if (is_complete) {
     if (seq > received_count_) {
@@ -242,12 +257,13 @@ void ShmemImageSubscriberNode::write_summary_report(
   }
   const double std_dev_ms = samples.empty() ? 0.0 : std::sqrt(sq_diff / samples.size());
 
+  const std::size_t measured_frames = latencies_ms_.size();
   const std::size_t size_bytes = static_cast<std::size_t>(width) * height;
 
   RCLCPP_INFO(
     get_logger(),
-    "=== Benchmark: %zu frames, %ux%u (%zu B), Target: %.1f Hz ===",
-    received_count_, width, height, size_bytes, target_hz_);
+    "=== Benchmark: %zu measured frames (excluded %d warm-up frames), %ux%u (%zu B), Target: %.1f Hz ===",
+    measured_frames, warmup_messages_, width, height, size_bytes, target_hz_);
   RCLCPP_INFO(
     get_logger(),
     "Latency (ms) -> Mean: %.3f | Min: %.3f | Max: %.3f | StdDev: %.3f",
@@ -269,7 +285,7 @@ void ShmemImageSubscriberNode::write_summary_report(
           << width << "x" << height << ","
           << target_hz_ << ","
           << max_messages_ << ","
-          << received_count_ << ","
+          << measured_frames << ","
           << std::fixed << std::setprecision(3)
           << mean_ms << ","
           << min_ms << ","

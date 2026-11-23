@@ -59,6 +59,7 @@ private:
   bool publish_diagnostics_{true};
 
   int max_messages_{0};
+  int warmup_messages_{10};
   bool auto_exit_{false};
   double target_hz_{0.0};
   std::string latency_csv_path_{""};
