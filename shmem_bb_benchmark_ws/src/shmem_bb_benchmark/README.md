@@ -1,4 +1,4 @@
-# shmem_buffer_backend_test
+# shmem_bb_benchmark
 
 A comprehensive ROS 2 test and verification package for [`shmem_buffer_backend`](../shmem_buffer_backend) and [`shmem_buffer`](../shmem_buffer).
 
@@ -45,7 +45,7 @@ This package provides standalone executable nodes, composable components, launch
 
 ```bash
 source /opt/ros/lyrical/setup.bash
-colcon build --packages-select shmem_buffer_backend_test
+colcon build --packages-select shmem_bb_benchmark
 ```
 
 ### Run Launch Files Interactively
@@ -55,11 +55,11 @@ colcon build --packages-select shmem_buffer_backend_test
    ```bash
    source install/setup.bash
    # Run 1000 frames (default) and output merged comparison CSV:
-   ros2 launch shmem_buffer_backend_test shmem_fallback_two_subs.launch.py \
+   ros2 launch shmem_bb_benchmark shmem_fallback_two_subs.launch.py \
      width:=1920 height:=1080 rate:=30.0
 
    # Or customize frame count and output path:
-   ros2 launch shmem_buffer_backend_test shmem_fallback_two_subs.launch.py \
+   ros2 launch shmem_bb_benchmark shmem_fallback_two_subs.launch.py \
      width:=1920 height:=1080 rate:=30.0 max_msgs:=500 csv_path:=/tmp/comparison.csv
    ```
    **Merged CSV Schema**:
@@ -70,11 +70,11 @@ colcon build --packages-select shmem_buffer_backend_test
    ```bash
    source install/setup.bash
    # Intra-process with shared memory backend:
-   ros2 launch shmem_buffer_backend_test intra_process_pub_sub.launch.py \
+   ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \
      width:=1920 height:=1080 rate:=30.0 mode:=shmem max_msgs:=1000
 
    # Intra-process with CPU backend:
-   ros2 launch shmem_buffer_backend_test intra_process_pub_sub.launch.py \
+   ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \
      width:=1920 height:=1080 rate:=30.0 mode:=cpu max_msgs:=1000
    ```
 
@@ -83,11 +83,11 @@ colcon build --packages-select shmem_buffer_backend_test
    ```bash
    source install/setup.bash
    # Run in Shared Memory mode:
-   ros2 launch shmem_buffer_backend_test shmem_or_wire_pub_sub.launch.py \
+   ros2 launch shmem_bb_benchmark shmem_or_wire_pub_sub.launch.py \
      width:=1920 height:=1080 rate:=30.0 mode:=shared max_msgs:=1000
 
    # Run in Wire / Fallback mode:
-   ros2 launch shmem_buffer_backend_test shmem_or_wire_pub_sub.launch.py \
+   ros2 launch shmem_bb_benchmark shmem_or_wire_pub_sub.launch.py \
      width:=1920 height:=1080 rate:=30.0 mode:=wire max_msgs:=1000
    ```
 
@@ -96,13 +96,13 @@ colcon build --packages-select shmem_buffer_backend_test
 Terminal 1 (Subscriber):
 ```bash
 source install/setup.bash
-ros2 run shmem_buffer_backend_test shmem_image_subscriber_node
+ros2 run shmem_bb_benchmark shmem_image_subscriber_node
 ```
 
 Terminal 2 (Publisher):
 ```bash
 source install/setup.bash
-ros2 run shmem_buffer_backend_test shmem_image_publisher_node --ros-args -p rate:=20.0
+ros2 run shmem_bb_benchmark shmem_image_publisher_node --ros-args -p rate:=20.0
 ```
 
 ---
@@ -113,7 +113,7 @@ To compare `shmem_buffer_backend` against conventional non-shared-memory ROS 2 t
 
 ```bash
 source install/setup.bash
-ros2 run shmem_buffer_backend_test benchmark_latency.py \
+ros2 run shmem_bb_benchmark benchmark_latency.py \
   --sizes 640x480 1280x720 1920x1080 \
   --rates 10 30 \
   --max-frames 30 \
@@ -124,8 +124,8 @@ ros2 run shmem_buffer_backend_test benchmark_latency.py \
 You can also run nodes individually with non-shm mode:
 ```bash
 # Non-shm subscriber
-ros2 run shmem_buffer_backend_test shmem_image_subscriber_node --ros-args -p use_shm:=false
+ros2 run shmem_bb_benchmark shmem_image_subscriber_node --ros-args -p use_shm:=false
 
 # Non-shm publisher
-ros2 run shmem_buffer_backend_test shmem_image_publisher_node --ros-args -p use_shm:=false
+ros2 run shmem_bb_benchmark shmem_image_publisher_node --ros-args -p use_shm:=false
 ```

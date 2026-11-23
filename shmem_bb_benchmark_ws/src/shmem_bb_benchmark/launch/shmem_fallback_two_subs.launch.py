@@ -257,7 +257,7 @@ def generate_launch_description():
 
     # 1. Shared-memory publisher node
     pub_node = Node(
-        package='shmem_buffer_backend_test',
+        package='shmem_bb_benchmark',
         executable='shmem_image_publisher_node',
         name='publisher_shared',
         parameters=[{
@@ -276,7 +276,7 @@ def generate_launch_description():
 
     # 2. Shared-memory subscriber node (zero-copy POSIX shared memory)
     sub_shared_node = Node(
-        package='shmem_buffer_backend_test',
+        package='shmem_bb_benchmark',
         executable='shmem_image_subscriber_node',
         name='subscriber_shared',
         parameters=[{
@@ -299,7 +299,7 @@ def generate_launch_description():
 
     # 3. Fallback / wire subscriber node (standard DDS CDR serialized copy)
     sub_fallback_node = Node(
-        package='shmem_buffer_backend_test',
+        package='shmem_bb_benchmark',
         executable='shmem_image_subscriber_node',
         name='subscriber_fallback',
         parameters=[{

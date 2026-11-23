@@ -15,13 +15,25 @@
 #include <memory>
 
 #include "rclcpp/rclcpp.hpp"
-#include "shmem_buffer_backend_test/shmem_image_publisher_node.hpp"
+#include "shmem_bb_benchmark/shmem_image_subscriber_node.hpp"
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<shmem_buffer_backend_test::ShmemImagePublisherNode>();
-  rclcpp::spin(node);
+  auto node = std::make_shared<shmem_bb_benchmark::ShmemImageSubscriberNode>();
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+  while (rclcpp::ok()) {
+    try {
+      executor.spin();
+    } catch (const std::exception & e) {
+      if (rclcpp::ok()) {
+        RCLCPP_WARN(
+          node->get_logger(),
+          "Subscriber recovered from dispatch error (frame dropped): %s", e.what());
+      }
+    }
+  }
   rclcpp::shutdown();
   return 0;
 }

@@ -31,11 +31,11 @@ This complements the inter-process launch files:
 
 Usage:
   # Intra-process with shared memory backend:
-  ros2 launch shmem_buffer_backend_test intra_process_pub_sub.launch.py \\
+  ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \\
     width:=1920 height:=1080 rate:=30.0 mode:=shmem max_msgs:=1000
 
   # Intra-process with CPU backend:
-  ros2 launch shmem_buffer_backend_test intra_process_pub_sub.launch.py \\
+  ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \\
     width:=1920 height:=1080 rate:=30.0 mode:=cpu max_msgs:=1000
 """
 
@@ -131,8 +131,8 @@ def generate_launch_description():
     # ── Composable nodes (same process, intra-process comms ON) ───────────────
 
     publisher_node = ComposableNode(
-        package='shmem_buffer_backend_test',
-        plugin='shmem_buffer_backend_test::ShmemImagePublisherNode',
+        package='shmem_bb_benchmark',
+        plugin='shmem_bb_benchmark::ShmemImagePublisherNode',
         name='intra_image_publisher',
         parameters=[{
             'topic': LaunchConfiguration('topic'),
@@ -149,8 +149,8 @@ def generate_launch_description():
     )
 
     subscriber_node = ComposableNode(
-        package='shmem_buffer_backend_test',
-        plugin='shmem_buffer_backend_test::ShmemImageSubscriberNode',
+        package='shmem_bb_benchmark',
+        plugin='shmem_bb_benchmark::ShmemImageSubscriberNode',
         name='intra_image_subscriber',
         parameters=[{
             'topic': LaunchConfiguration('topic'),

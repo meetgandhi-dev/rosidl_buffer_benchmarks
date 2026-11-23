@@ -118,7 +118,7 @@ def generate_launch_description():
 
     # 1. Publisher node
     pub_node = Node(
-        package='shmem_buffer_backend_test',
+        package='shmem_bb_benchmark',
         executable='shmem_image_publisher_node',
         name='image_publisher',
         parameters=[{
@@ -137,7 +137,7 @@ def generate_launch_description():
 
     # 2. Subscriber node
     sub_node = Node(
-        package='shmem_buffer_backend_test',
+        package='shmem_bb_benchmark',
         executable='shmem_image_subscriber_node',
         name='image_subscriber',
         parameters=[{

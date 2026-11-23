@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef SHMEM_BUFFER_BACKEND_TEST__TEST_PATTERN_UTILS_HPP_
-#define SHMEM_BUFFER_BACKEND_TEST__TEST_PATTERN_UTILS_HPP_
+#ifndef SHMEM_BB_BENCHMARK__TEST_PATTERN_UTILS_HPP_
+#define SHMEM_BB_BENCHMARK__TEST_PATTERN_UTILS_HPP_
 
 #include <cstddef>
 #include <cstdint>
@@ -21,7 +21,7 @@
 #include <fstream>
 #include <string>
 
-namespace shmem_buffer_backend_test
+namespace shmem_bb_benchmark
 {
 
 /// \brief Generate a deterministic byte for a given sequence and element offset.
@@ -56,6 +56,6 @@ inline bool verify_test_pattern(
   return true;
 }
 
-}  // namespace shmem_buffer_backend_test
+}  // namespace shmem_bb_benchmark
 
-#endif  // SHMEM_BUFFER_BACKEND_TEST__TEST_PATTERN_UTILS_HPP_
+#endif  // SHMEM_BB_BENCHMARK__TEST_PATTERN_UTILS_HPP_

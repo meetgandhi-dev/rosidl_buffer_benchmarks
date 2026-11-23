@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "shmem_buffer_backend_test/shmem_image_publisher_node.hpp"
+#include "shmem_bb_benchmark/shmem_image_publisher_node.hpp"
 
 #include <chrono>
 #include <utility>
 
 #include "rclcpp_components/register_node_macro.hpp"
 #include "shmem_buffer/shmem_buffer_api.hpp"
-#include "shmem_buffer_backend_test/test_pattern_utils.hpp"
+#include "shmem_bb_benchmark/test_pattern_utils.hpp"
 
-namespace shmem_buffer_backend_test
+namespace shmem_bb_benchmark
 {
 
 ShmemImagePublisherNode::ShmemImagePublisherNode(const rclcpp::NodeOptions & options)
@@ -120,6 +120,6 @@ void ShmemImagePublisherNode::publish_timer_callback()
     payload_size, message_history_.back().data.get_backend_type().c_str());
 }
 
-}  // namespace shmem_buffer_backend_test
+}  // namespace shmem_bb_benchmark
 
-RCLCPP_COMPONENTS_REGISTER_NODE(shmem_buffer_backend_test::ShmemImagePublisherNode)
+RCLCPP_COMPONENTS_REGISTER_NODE(shmem_bb_benchmark::ShmemImagePublisherNode)

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "shmem_buffer_backend_test/shmem_image_subscriber_node.hpp"
+#include "shmem_bb_benchmark/shmem_image_subscriber_node.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -29,9 +29,9 @@
 #include "rclcpp/subscription_options.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "shmem_buffer/shmem_buffer_api.hpp"
-#include "shmem_buffer_backend_test/test_pattern_utils.hpp"
+#include "shmem_bb_benchmark/test_pattern_utils.hpp"
 
-namespace shmem_buffer_backend_test
+namespace shmem_bb_benchmark
 {
 
 ShmemImageSubscriberNode::ShmemImageSubscriberNode(const rclcpp::NodeOptions & options)
@@ -290,6 +290,6 @@ void ShmemImageSubscriberNode::write_summary_report(
   }
 }
 
-}  // namespace shmem_buffer_backend_test
+}  // namespace shmem_bb_benchmark
 
-RCLCPP_COMPONENTS_REGISTER_NODE(shmem_buffer_backend_test::ShmemImageSubscriberNode)
+RCLCPP_COMPONENTS_REGISTER_NODE(shmem_bb_benchmark::ShmemImageSubscriberNode)

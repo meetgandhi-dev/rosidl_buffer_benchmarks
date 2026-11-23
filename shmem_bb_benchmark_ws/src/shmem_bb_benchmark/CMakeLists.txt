@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(shmem_buffer_backend_test)
+project(shmem_bb_benchmark)
 
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
@@ -49,8 +49,8 @@ target_link_libraries(shmem_test_components
 )
 
 rclcpp_components_register_nodes(shmem_test_components
-  "shmem_buffer_backend_test::ShmemImagePublisherNode"
-  "shmem_buffer_backend_test::ShmemImageSubscriberNode"
+  "shmem_bb_benchmark::ShmemImagePublisherNode"
+  "shmem_bb_benchmark::ShmemImageSubscriberNode"
 )
 
 # Standalone Executables

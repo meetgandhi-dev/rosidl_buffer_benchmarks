@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>shmem_buffer_backend_test</name>
+  <name>shmem_bb_benchmark</name>
   <version>0.1.0</version>
   <description>Test and verification package for shmem_buffer_backend in ROS 2</description>
   <maintainer email="meet.gandhi@einfochips.com">Meet Gandhi</maintainer>

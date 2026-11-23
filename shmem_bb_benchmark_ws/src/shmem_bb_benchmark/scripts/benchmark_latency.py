@@ -54,7 +54,7 @@ def run_single_test(
     env['RMW_IMPLEMENTATION'] = 'rmw_fastrtps_cpp'
 
     sub_cmd = [
-        'ros2', 'run', 'shmem_buffer_backend_test', 'shmem_image_subscriber_node',
+        'ros2', 'run', 'shmem_bb_benchmark', 'shmem_image_subscriber_node',
         '--ros-args',
         '-p', f'topic:={topic}',
         '-p', f'max_messages:={max_frames}',
@@ -67,7 +67,7 @@ def run_single_test(
     ]
 
     pub_cmd = [
-        'ros2', 'run', 'shmem_buffer_backend_test', 'shmem_image_publisher_node',
+        'ros2', 'run', 'shmem_bb_benchmark', 'shmem_image_publisher_node',
         '--ros-args',
         '-p', f'topic:={topic}',
         '-p', f'width:={width}',

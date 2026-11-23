@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef SHMEM_BUFFER_BACKEND_TEST__SHMEM_IMAGE_SUBSCRIBER_NODE_HPP_
-#define SHMEM_BUFFER_BACKEND_TEST__SHMEM_IMAGE_SUBSCRIBER_NODE_HPP_
+#ifndef SHMEM_BB_BENCHMARK__SHMEM_IMAGE_SUBSCRIBER_NODE_HPP_
+#define SHMEM_BB_BENCHMARK__SHMEM_IMAGE_SUBSCRIBER_NODE_HPP_
 
 #include <cstddef>
 #include <cstdint>
@@ -28,7 +28,7 @@
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/u_int32.hpp"
 
-namespace shmem_buffer_backend_test
+namespace shmem_bb_benchmark
 {
 
 class ShmemImageSubscriberNode : public rclcpp::Node
@@ -73,6 +73,6 @@ private:
   uint32_t last_height_{0};
 };
 
-}  // namespace shmem_buffer_backend_test
+}  // namespace shmem_bb_benchmark
 
-#endif  // SHMEM_BUFFER_BACKEND_TEST__SHMEM_IMAGE_SUBSCRIBER_NODE_HPP_
+#endif  // SHMEM_BB_BENCHMARK__SHMEM_IMAGE_SUBSCRIBER_NODE_HPP_

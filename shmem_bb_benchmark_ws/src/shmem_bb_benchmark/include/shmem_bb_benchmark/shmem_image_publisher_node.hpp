@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef SHMEM_BUFFER_BACKEND_TEST__SHMEM_IMAGE_PUBLISHER_NODE_HPP_
-#define SHMEM_BUFFER_BACKEND_TEST__SHMEM_IMAGE_PUBLISHER_NODE_HPP_
+#ifndef SHMEM_BB_BENCHMARK__SHMEM_IMAGE_PUBLISHER_NODE_HPP_
+#define SHMEM_BB_BENCHMARK__SHMEM_IMAGE_PUBLISHER_NODE_HPP_
 
 #include <cstddef>
 #include <cstdint>
@@ -28,7 +28,7 @@
 #include "sensor_msgs/msg/image.hpp"
 #include "std_msgs/msg/u_int32.hpp"
 
-namespace shmem_buffer_backend_test
+namespace shmem_bb_benchmark
 {
 
 class ShmemImagePublisherNode : public rclcpp::Node
@@ -62,6 +62,6 @@ private:
   std::deque<sensor_msgs::msg::Image> message_history_;
 };
 
-}  // namespace shmem_buffer_backend_test
+}  // namespace shmem_bb_benchmark
 
-#endif  // SHMEM_BUFFER_BACKEND_TEST__SHMEM_IMAGE_PUBLISHER_NODE_HPP_
+#endif  // SHMEM_BB_BENCHMARK__SHMEM_IMAGE_PUBLISHER_NODE_HPP_

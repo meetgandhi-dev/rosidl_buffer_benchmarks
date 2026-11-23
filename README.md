@@ -11,7 +11,7 @@ rosidl_buffer_benchmarks/
 ├── shmem_bb_benchmark_ws/          # ROS 2 colcon workspace
 │   └── src/
 │       ├── shmem_buffer_backend/      # Git submodule: upstream shmem_buffer_backend (branch: lyrical)
-│       └── shmem_buffer_backend_test/ # Benchmark package: nodes, launch scripts, test patterns
+│       └── shmem_bb_benchmark/ # Benchmark package: nodes, launch scripts, test patterns
 ├── results/                        # Benchmark results, CSV logs, and latency plots
 ├── .gitmodules                     # Submodule configuration
 ├── .gitignore
@@ -79,7 +79,7 @@ Runs **1 publisher** and **2 subscribers** on the same topic simultaneously:
 Automatically runs for `max_msgs` frames and outputs side-by-side latency stats and a merged CSV:
 
 ```bash
-ros2 launch shmem_buffer_backend_test shmem_fallback_two_subs.launch.py \
+ros2 launch shmem_bb_benchmark shmem_fallback_two_subs.launch.py \
   width:=1920 height:=1080 rate:=30.0 max_msgs:=1000 \
   csv_path:=$(pwd)/results/1080p_30fps_two_subs_comparison.csv
 ```
@@ -90,12 +90,12 @@ Runs 1 publisher and 1 subscriber **in separate processes** in either `shared` (
 
 ```bash
 # 1. Run in Zero-Copy Shared Memory Mode:
-ros2 launch shmem_buffer_backend_test shmem_or_wire_pub_sub.launch.py \
+ros2 launch shmem_bb_benchmark shmem_or_wire_pub_sub.launch.py \
   width:=1920 height:=1080 rate:=30.0 mode:=shared max_msgs:=1000 \
   csv_path:=$(pwd)/results/1080p_30fps_shmem.csv
 
 # 2. Run in Wire (CPU fallback) Mode:
-ros2 launch shmem_buffer_backend_test shmem_or_wire_pub_sub.launch.py \
+ros2 launch shmem_bb_benchmark shmem_or_wire_pub_sub.launch.py \
   width:=1920 height:=1080 rate:=30.0 mode:=wire max_msgs:=1000 \
   csv_path:=$(pwd)/results/1080p_30fps_wire.csv
 ```
@@ -109,12 +109,12 @@ purely at the intra-process level:
 
 ```bash
 # Intra-process with shared memory backend:
-ros2 launch shmem_buffer_backend_test intra_process_pub_sub.launch.py \
+ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \
   width:=1920 height:=1080 rate:=30.0 mode:=shmem max_msgs:=1000 \
   csv_path:=$(pwd)/results/1080p_30fps_intra_shmem.csv
 
 # Intra-process with CPU backend:
-ros2 launch shmem_buffer_backend_test intra_process_pub_sub.launch.py \
+ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \
   width:=1920 height:=1080 rate:=30.0 mode:=cpu max_msgs:=1000 \
   csv_path:=$(pwd)/results/1080p_30fps_intra_cpu.csv
 ```
@@ -134,7 +134,7 @@ ros2 launch shmem_buffer_backend_test intra_process_pub_sub.launch.py \
 Run multi-resolution/multi-rate sweeps across backends using the benchmarking script:
 
 ```bash
-ros2 run shmem_buffer_backend_test benchmark_latency.py \
+ros2 run shmem_bb_benchmark benchmark_latency.py \
   --sizes 640x480 1280x720 1920x1080 3840x2160 \
   --rates 10 30 60 \
   --max-frames 1000 \
