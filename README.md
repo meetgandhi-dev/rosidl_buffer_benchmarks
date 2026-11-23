@@ -52,23 +52,40 @@ If already cloned without `--recursive`, fetch and initialize submodules:
 git submodule update --init --recursive
 ```
 
-### Build the Workspaces
+### Workspace Helper Scripts (`install_deps.sh` & `build.sh`)
 
-#### Building Shared Memory Workspace
+Each workspace includes dedicated helper scripts to install dependencies via `rosdep` and build only the required packages using `--packages-up-to`:
+
+#### 1. Shared Memory Workspace (`shmem_bb_benchmark_ws`)
 
 ```bash
 cd shmem_bb_benchmark_ws
-source /opt/ros/lyrical/setup.bash
-colcon build --symlink-install
+
+# Install dependencies (runs rosdep for shmem_bb_benchmark and its deps)
+./install_deps.sh
+
+# Build workspace (uses colcon build --packages-up-to shmem_bb_benchmark)
+./build.sh
+
+# Source environment
+source install/setup.bash
 cd ..
 ```
 
-#### Building CUDA Workspace (on systems with NVIDIA GPU & CUDA Toolkit)
+#### 2. CUDA Workspace (`cuda_bb_benchmark_ws`)
+*(Requires system with NVIDIA GPU and CUDA Toolkit)*
 
 ```bash
 cd cuda_bb_benchmark_ws
-source /opt/ros/lyrical/setup.bash
-colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+# Install dependencies via rosdep (targets cuda_bb_benchmark without unneeded extras)
+./install_deps.sh
+
+# Build workspace (uses colcon build --packages-up-to cuda_bb_benchmark)
+./build.sh
+
+# Source environment
+source install/setup.bash
 cd ..
 ```
 

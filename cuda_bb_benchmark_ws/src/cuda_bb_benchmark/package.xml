@@ -21,7 +21,6 @@
   <depend>rosidl_buffer_backend</depend>
   <depend>rosidl_runtime_cpp</depend>
 
-  <exec_depend>cuda_buffer_py</exec_depend>
   <exec_depend>rclpy</exec_depend>
 
   <export>
