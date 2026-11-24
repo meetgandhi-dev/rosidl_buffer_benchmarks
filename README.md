@@ -363,7 +363,12 @@ All benchmark CSVs and logs are saved under [`results/`](results/).
 | `shmem_sub_rss_peak_mb` | SHMEM subscriber process peak resident memory (`VmHWM`) in MB |
 | `fallback_sub_rss_peak_mb` | Fallback subscriber process peak resident memory (`VmHWM`) in MB |
 | `system_ram_mb` | Host system RAM used (MB) |
-| `gpu_util_pct` | GPU core utilization (%) or `N/A` if no NVIDIA GPU |
+| `gpu_util_pct` | GPU core utilization (%) (from Jetson `tegrastats` `GR3D_FREQ`, sysfs, or `nvidia-smi`) |
+| `gpu_freq_mhz` | GPU core frequency in MHz (from Jetson `tegrastats` `GR3D_FREQ` or devfreq) |
+| `emc_util_pct` | EMC memory controller utilization (%) (from Jetson `tegrastats` `EMC_FREQ`) |
+| `emc_freq_mhz` | EMC memory controller bus clock in MHz (from Jetson `tegrastats` `EMC_FREQ` or devfreq) |
+| `cpu_temp_c` | CPU temperature in °C (from Jetson `tegrastats` or thermal zones) |
+| `gpu_temp_c` | GPU temperature in °C (from Jetson `tegrastats` or thermal zones) |
 
 #### CUDA Comparison (`cuda_fallback_two_subs.launch.py`)
 
@@ -387,7 +392,12 @@ All benchmark CSVs and logs are saved under [`results/`](results/).
 | `fallback_sub_cpu_mean_pct` / `fallback_sub_cpu_max_pct` | Fallback subscriber process CPU utilization (%) (mean / peak) |
 | `pub_rss_peak_mb` / `cuda_sub_rss_peak_mb` / `fallback_sub_rss_peak_mb` | Peak process resident memory (`VmHWM`) in MB |
 | `system_ram_mb` | Host system RAM used (MB) |
-| `gpu_util_pct` | GPU core utilization (%) or `N/A` |
+| `gpu_util_pct` | GPU core utilization (%) (from Jetson `tegrastats` `GR3D_FREQ`, sysfs, or `nvidia-smi`) |
+| `gpu_freq_mhz` | GPU core frequency in MHz (from Jetson `tegrastats` `GR3D_FREQ` or devfreq) |
+| `emc_util_pct` | EMC memory controller utilization (%) (from Jetson `tegrastats` `EMC_FREQ`) |
+| `emc_freq_mhz` | EMC memory controller bus clock in MHz (from Jetson `tegrastats` `EMC_FREQ` or devfreq) |
+| `cpu_temp_c` | CPU temperature in °C (from Jetson `tegrastats` or thermal zones) |
+| `gpu_temp_c` | GPU temperature in °C (from Jetson `tegrastats` or thermal zones) |
 
 ### 6.2 Single-Mode and Intra-Process CSV Schema
 
@@ -417,7 +427,12 @@ All benchmark CSVs and logs are saved under [`results/`](results/).
 | `pub_rss_peak_mb` | Publisher process peak resident memory (`VmHWM`) in MB |
 | `sub_rss_peak_mb` | Subscriber process peak resident memory (`VmHWM`) in MB |
 | `system_ram_mb` | Host system RAM used (MB) |
-| `gpu_util_pct` | NVIDIA GPU core utilization (%) or `N/A` |
+| `gpu_util_pct` | GPU core utilization (%) (from Jetson `tegrastats` `GR3D_FREQ`, sysfs, or `nvidia-smi`) |
+| `gpu_freq_mhz` | GPU core frequency in MHz (from Jetson `tegrastats` `GR3D_FREQ` or devfreq) |
+| `emc_util_pct` | EMC memory controller utilization (%) (from Jetson `tegrastats` `EMC_FREQ`) |
+| `emc_freq_mhz` | EMC memory controller bus clock in MHz (from Jetson `tegrastats` `EMC_FREQ` or devfreq) |
+| `cpu_temp_c` | CPU temperature in °C (from Jetson `tegrastats` or thermal zones) |
+| `gpu_temp_c` | GPU temperature in °C (from Jetson `tegrastats` or thermal zones) |
 
 ---
 

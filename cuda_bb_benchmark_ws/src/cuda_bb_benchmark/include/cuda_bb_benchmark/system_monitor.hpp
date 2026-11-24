@@ -38,7 +38,16 @@ struct SystemMetricsSample
   double process_rss_peak_mb{0.0};
   double system_ram_used_mb{0.0};
   double gpu_util_pct{0.0};
+  double gpu_freq_mhz{0.0};
   bool gpu_valid{false};
+  bool gpu_freq_valid{false};
+  double emc_util_pct{0.0};
+  double emc_freq_mhz{0.0};
+  bool emc_valid{false};
+  double cpu_temp_c{0.0};
+  bool cpu_temp_valid{false};
+  double gpu_temp_c{0.0};
+  bool gpu_temp_valid{false};
 };
 
 struct SystemMetricsSummary
@@ -49,7 +58,16 @@ struct SystemMetricsSummary
   double process_rss_peak_mb{0.0};
   double system_ram_mean_mb{0.0};
   double gpu_util_mean_pct{0.0};
+  double gpu_freq_mean_mhz{0.0};
   bool gpu_available{false};
+  bool gpu_freq_available{false};
+  double emc_util_mean_pct{0.0};
+  double emc_freq_mean_mhz{0.0};
+  bool emc_available{false};
+  double cpu_temp_mean_c{0.0};
+  bool cpu_temp_available{false};
+  double gpu_temp_mean_c{0.0};
+  bool gpu_temp_available{false};
 };
 
 class SystemMonitor
@@ -96,6 +114,7 @@ public:
     std::lock_guard<std::mutex> lock(mutex_);
     SystemMetricsSummary summary;
     if (samples_.empty()) {
+      // Fallback: collect at least one instantaneous sample
       double rss = 0.0, peak = 0.0;
       read_process_rss_mb(rss, peak);
       summary.process_rss_mean_mb = rss;
@@ -109,6 +128,15 @@ public:
     double sum_sys_ram = 0.0;
     double sum_gpu = 0.0;
     std::size_t gpu_count = 0;
+    double sum_gpu_freq = 0.0;
+    std::size_t gpu_freq_count = 0;
+    double sum_emc_util = 0.0;
+    double sum_emc_freq = 0.0;
+    std::size_t emc_count = 0;
+    double sum_cpu_temp = 0.0;
+    std::size_t cpu_temp_count = 0;
+    double sum_gpu_temp = 0.0;
+    std::size_t gpu_temp_count = 0;
 
     for (const auto & s : samples_) {
       sum_cpu += s.process_cpu_pct;
@@ -123,6 +151,23 @@ public:
         sum_gpu += s.gpu_util_pct;
         ++gpu_count;
       }
+      if (s.gpu_freq_valid) {
+        sum_gpu_freq += s.gpu_freq_mhz;
+        ++gpu_freq_count;
+      }
+      if (s.emc_valid) {
+        sum_emc_util += s.emc_util_pct;
+        sum_emc_freq += s.emc_freq_mhz;
+        ++emc_count;
+      }
+      if (s.cpu_temp_valid) {
+        sum_cpu_temp += s.cpu_temp_c;
+        ++cpu_temp_count;
+      }
+      if (s.gpu_temp_valid) {
+        sum_gpu_temp += s.gpu_temp_c;
+        ++gpu_temp_count;
+      }
     }
 
     const double n = static_cast<double>(samples_.size());
@@ -135,6 +180,23 @@ public:
     if (gpu_count > 0) {
       summary.gpu_available = true;
       summary.gpu_util_mean_pct = sum_gpu / static_cast<double>(gpu_count);
+    }
+    if (gpu_freq_count > 0) {
+      summary.gpu_freq_available = true;
+      summary.gpu_freq_mean_mhz = sum_gpu_freq / static_cast<double>(gpu_freq_count);
+    }
+    if (emc_count > 0) {
+      summary.emc_available = true;
+      summary.emc_util_mean_pct = sum_emc_util / static_cast<double>(emc_count);
+      summary.emc_freq_mean_mhz = sum_emc_freq / static_cast<double>(emc_count);
+    }
+    if (cpu_temp_count > 0) {
+      summary.cpu_temp_available = true;
+      summary.cpu_temp_mean_c = sum_cpu_temp / static_cast<double>(cpu_temp_count);
+    }
+    if (gpu_temp_count > 0) {
+      summary.gpu_temp_available = true;
+      summary.gpu_temp_mean_c = sum_gpu_temp / static_cast<double>(gpu_temp_count);
     }
 
     return summary;
@@ -213,8 +275,8 @@ private:
     read_process_rss_mb(sample.process_rss_mb, sample.process_rss_peak_mb);
     sample.system_ram_used_mb = read_system_ram_used_mb();
 
-    // 3. GPU (only if reliably available)
-    sample.gpu_valid = read_gpu_utilization(sample.gpu_util_pct);
+    // 3. Hardware Telemetry (Jetson tegrastats / sysfs, or desktop nvidia-smi / sysfs thermal)
+    collect_hardware_telemetry(sample);
 
     return sample;
   }
@@ -263,19 +325,234 @@ private:
       static_cast<double>(mem_total_kb - mem_avail_kb) / 1024.0 : 0.0;
   }
 
-  static bool read_gpu_utilization(double & gpu_util_pct)
+  static void collect_hardware_telemetry(SystemMetricsSample & sample)
   {
-    gpu_util_pct = 0.0;
-    static bool checked_binary = false;
+    static bool checked_env = false;
+    static bool has_tegrastats = false;
     static bool has_nvidia_smi = false;
-    if (!checked_binary) {
-      checked_binary = true;
-      has_nvidia_smi = (std::system("which nvidia-smi >/dev/null 2>&1") == 0);
-    }
-    if (!has_nvidia_smi) {
-      return false;
+
+    if (!checked_env) {
+      checked_env = true;
+      has_tegrastats = (std::system("which tegrastats >/dev/null 2>&1") == 0);
+      if (!has_tegrastats) {
+        has_nvidia_smi = (std::system("which nvidia-smi >/dev/null 2>&1") == 0);
+      }
     }
 
+    if (has_tegrastats) {
+      // Query Jetson tegrastats
+      if (read_tegrastats_sample(sample)) {
+        return;
+      }
+    }
+
+    // Try sysfs directly for Jetson devfreq / thermal
+    read_sysfs_jetson_telemetry(sample);
+
+    // If GPU still not valid, try desktop nvidia-smi
+    if (!sample.gpu_valid && has_nvidia_smi) {
+      sample.gpu_valid = read_nvidia_smi_utilization(sample.gpu_util_pct);
+    }
+
+    // If temperatures still not found, try generic thermal zones (e.g. x86 / Linux generic)
+    if (!sample.cpu_temp_valid || !sample.gpu_temp_valid) {
+      read_generic_thermal_zones(sample);
+    }
+  }
+
+  static bool read_tegrastats_sample(SystemMetricsSample & sample)
+  {
+    FILE * pipe = popen("tegrastats --interval 100 2>/dev/null | head -n 1", "r");
+    if (!pipe) return false;
+    char buffer[1024];
+    bool read_ok = (fgets(buffer, sizeof(buffer), pipe) != nullptr);
+    pclose(pipe);
+    if (!read_ok) return false;
+
+    std::string text(buffer);
+    parse_tegrastats_line(text, sample);
+    return true;
+  }
+
+  static void parse_tegrastats_line(const std::string & text, SystemMetricsSample & sample)
+  {
+    // Parse GR3D_FREQ: e.g. "GR3D_FREQ 15%@1300" or "GR3D_FREQ 0%@..."
+    auto pos_gr3d = text.find("GR3D_FREQ");
+    if (pos_gr3d != std::string::npos) {
+      auto start = pos_gr3d + 9;
+      while (start < text.size() && text[start] == ' ') ++start;
+      auto pct_pos = text.find('%', start);
+      auto at_pos = text.find('@', start);
+      if (pct_pos != std::string::npos && (at_pos == std::string::npos || pct_pos < at_pos)) {
+        try {
+          sample.gpu_util_pct = std::stod(text.substr(start, pct_pos - start));
+          sample.gpu_valid = true;
+        } catch (...) {}
+      }
+      if (at_pos != std::string::npos) {
+        try {
+          auto end = at_pos + 1;
+          while (end < text.size() && (std::isdigit(text[end]) || text[end] == '.')) ++end;
+          sample.gpu_freq_mhz = std::stod(text.substr(at_pos + 1, end - (at_pos + 1)));
+          sample.gpu_freq_valid = true;
+        } catch (...) {}
+      }
+    }
+
+    // Parse EMC_FREQ: e.g. "EMC_FREQ 2%@3199" or "EMC_FREQ 0%@204"
+    auto pos_emc = text.find("EMC_FREQ");
+    if (pos_emc != std::string::npos) {
+      auto start = pos_emc + 8;
+      while (start < text.size() && text[start] == ' ') ++start;
+      auto pct_pos = text.find('%', start);
+      auto at_pos = text.find('@', start);
+      if (pct_pos != std::string::npos && at_pos != std::string::npos && pct_pos < at_pos) {
+        try {
+          sample.emc_util_pct = std::stod(text.substr(start, pct_pos - start));
+          auto end = at_pos + 1;
+          while (end < text.size() && (std::isdigit(text[end]) || text[end] == '.')) ++end;
+          sample.emc_freq_mhz = std::stod(text.substr(at_pos + 1, end - (at_pos + 1)));
+          sample.emc_valid = true;
+        } catch (...) {}
+      }
+    }
+
+    // Parse CPU / GPU temperatures: e.g. "cpu 38.5C", "gpu 37.6C", "CPU@38.5C", "GPU@37.6C"
+    // Case-insensitive / common tegrastats tokens
+    parse_temperature_token(text, "cpu", sample.cpu_temp_c, sample.cpu_temp_valid);
+    if (!sample.cpu_temp_valid) {
+      parse_temperature_token(text, "CPU", sample.cpu_temp_c, sample.cpu_temp_valid);
+    }
+    parse_temperature_token(text, "gpu", sample.gpu_temp_c, sample.gpu_temp_valid);
+    if (!sample.gpu_temp_valid) {
+      parse_temperature_token(text, "GPU", sample.gpu_temp_c, sample.gpu_temp_valid);
+    }
+  }
+
+  static void parse_temperature_token(const std::string & text, const std::string & token, double & temp_c, bool & valid)
+  {
+    auto pos = text.find(token);
+    while (pos != std::string::npos) {
+      // Check word boundary before token
+      if (pos == 0 || text[pos - 1] == ' ' || text[pos - 1] == '[' || text[pos - 1] == ',') {
+        auto after = pos + token.size();
+        if (after < text.size() && (text[after] == ' ' || text[after] == '@')) {
+          while (after < text.size() && (text[after] == ' ' || text[after] == '@')) ++after;
+          auto end = after;
+          while (end < text.size() && (std::isdigit(text[end]) || text[end] == '.' || text[end] == '-')) ++end;
+          if (end > after && end < text.size() && (text[end] == 'C' || text[end] == 'c')) {
+            try {
+              temp_c = std::stod(text.substr(after, end - after));
+              valid = true;
+              return;
+            } catch (...) {}
+          }
+        }
+      }
+      pos = text.find(token, pos + 1);
+    }
+  }
+
+  static void read_sysfs_jetson_telemetry(SystemMetricsSample & sample)
+  {
+    // Check GPU load from Jetson sysfs nodes
+    static const std::vector<std::string> gpu_load_paths = {
+      "/sys/devices/gpu.0/load",
+      "/sys/devices/platform/17000000.gpu/devfreq/17000000.gpu/device/load",
+      "/sys/devices/platform/17000000.ga10b/devfreq/17000000.ga10b/device/load"
+    };
+    for (const auto & path : gpu_load_paths) {
+      std::ifstream f(path);
+      if (f.is_open()) {
+        double val = 0.0;
+        if (f >> val) {
+          // On some kernels load is 0-1000 (per mille), on others 0-100%
+          if (val > 100.0) val /= 10.0;
+          sample.gpu_util_pct = val;
+          sample.gpu_valid = true;
+          break;
+        }
+      }
+    }
+
+    // Check GPU frequency from Jetson devfreq
+    static const std::vector<std::string> gpu_freq_paths = {
+      "/sys/devices/platform/17000000.gpu/devfreq/17000000.gpu/cur_freq",
+      "/sys/devices/platform/17000000.ga10b/devfreq/17000000.ga10b/cur_freq",
+      "/sys/devices/gpu.0/devfreq/17000000.gpu/cur_freq"
+    };
+    for (const auto & path : gpu_freq_paths) {
+      std::ifstream f(path);
+      if (f.is_open()) {
+        double hz = 0.0;
+        if (f >> hz) {
+          sample.gpu_freq_mhz = hz > 1e6 ? hz / 1e6 : (hz > 1e3 ? hz / 1e3 : hz);
+          sample.gpu_freq_valid = true;
+          break;
+        }
+      }
+    }
+
+    // Check EMC frequency / utilization
+    static const std::vector<std::string> emc_freq_paths = {
+      "/sys/kernel/debug/clk/emc/clk_rate",
+      "/sys/devices/platform/17000010.devfreq-emc/devfreq/17000010.devfreq-emc/cur_freq"
+    };
+    for (const auto & path : emc_freq_paths) {
+      std::ifstream f(path);
+      if (f.is_open()) {
+        double hz = 0.0;
+        if (f >> hz) {
+          sample.emc_freq_mhz = hz > 1e6 ? hz / 1e6 : (hz > 1e3 ? hz / 1e3 : hz);
+          sample.emc_valid = true;
+          break;
+        }
+      }
+    }
+  }
+
+  static void read_generic_thermal_zones(SystemMetricsSample & sample)
+  {
+    for (int zone = 0; zone < 20; ++zone) {
+      std::string type_path = "/sys/class/thermal/thermal_zone" + std::to_string(zone) + "/type";
+      std::string temp_path = "/sys/class/thermal/thermal_zone" + std::to_string(zone) + "/temp";
+      std::ifstream type_file(type_path);
+      if (!type_file.is_open()) break;
+      std::string type_name;
+      std::getline(type_file, type_name);
+
+      std::ifstream temp_file(temp_path);
+      if (!temp_file.is_open()) continue;
+      double raw_temp = 0.0;
+      if (!(temp_file >> raw_temp)) continue;
+      double temp_c = (raw_temp > 1000.0) ? (raw_temp / 1000.0) : raw_temp;
+
+      // Identify CPU thermal zone
+      if (!sample.cpu_temp_valid) {
+        if (type_name == "CPU-therm" || type_name == "cpu-therm" ||
+            type_name == "TCPU" || type_name == "x86_pkg_temp" ||
+            type_name.find("cpu") != std::string::npos ||
+            type_name.find("CPU") != std::string::npos) {
+          sample.cpu_temp_c = temp_c;
+          sample.cpu_temp_valid = true;
+        }
+      }
+
+      // Identify GPU thermal zone
+      if (!sample.gpu_temp_valid) {
+        if (type_name == "GPU-therm" || type_name == "gpu-therm" ||
+            type_name.find("gpu") != std::string::npos ||
+            type_name.find("GPU") != std::string::npos) {
+          sample.gpu_temp_c = temp_c;
+          sample.gpu_temp_valid = true;
+        }
+      }
+    }
+  }
+
+  static bool read_nvidia_smi_utilization(double & gpu_util_pct)
+  {
+    gpu_util_pct = 0.0;
     FILE * pipe = popen("nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null", "r");
     if (!pipe) return false;
     char buffer[64];

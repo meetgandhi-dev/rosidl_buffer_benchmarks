@@ -506,10 +506,31 @@ void CudaImageSubscriberNode::write_summary_report(
   RCLCPP_INFO(get_logger(), "   System RAM Used:   %.1f MB",
     sys_summary.system_ram_mean_mb);
   if (sys_summary.gpu_available) {
-    RCLCPP_INFO(get_logger(), "   GPU Utilization:   %.1f%%",
-      sys_summary.gpu_util_mean_pct);
+    if (sys_summary.gpu_freq_available) {
+      RCLCPP_INFO(get_logger(), "   GPU Util / Freq:   %.1f%% | %.0f MHz",
+        sys_summary.gpu_util_mean_pct, sys_summary.gpu_freq_mean_mhz);
+    } else {
+      RCLCPP_INFO(get_logger(), "   GPU Utilization:   %.1f%%",
+        sys_summary.gpu_util_mean_pct);
+    }
   } else {
     RCLCPP_INFO(get_logger(), "   GPU Utilization:   N/A");
+  }
+  if (sys_summary.emc_available) {
+    RCLCPP_INFO(get_logger(), "   EMC Memory Ctrl:   %.1f%% | %.0f MHz",
+      sys_summary.emc_util_mean_pct, sys_summary.emc_freq_mean_mhz);
+  } else {
+    RCLCPP_INFO(get_logger(), "   EMC Memory Ctrl:   N/A");
+  }
+  if (sys_summary.cpu_temp_available || sys_summary.gpu_temp_available) {
+    std::string cpu_t = sys_summary.cpu_temp_available ?
+      (std::to_string(static_cast<int>(std::round(sys_summary.cpu_temp_mean_c))) + " C") : "N/A";
+    std::string gpu_t = sys_summary.gpu_temp_available ?
+      (std::to_string(static_cast<int>(std::round(sys_summary.gpu_temp_mean_c))) + " C") : "N/A";
+    RCLCPP_INFO(get_logger(), "   Temperatures:      CPU: %s | GPU: %s",
+      cpu_t.c_str(), gpu_t.c_str());
+  } else {
+    RCLCPP_INFO(get_logger(), "   Temperatures:      CPU: N/A | GPU: N/A");
   }
   RCLCPP_INFO(get_logger(), "==========================================================================");
 
@@ -526,7 +547,8 @@ void CudaImageSubscriberNode::write_summary_report(
             << "cb_mean_latency_ms,cb_min_latency_ms,cb_p50_latency_ms,cb_p95_latency_ms,cb_p99_latency_ms,cb_max_latency_ms,cb_std_dev_ms,cb_outliers_3sigma_count,"
             << "br_mean_latency_ms,br_min_latency_ms,br_p50_latency_ms,br_p95_latency_ms,br_p99_latency_ms,br_max_latency_ms,br_std_dev_ms,br_outliers_3sigma_count,"
             << "pub_cpu_mean_pct,pub_cpu_max_pct,sub_cpu_mean_pct,sub_cpu_max_pct,"
-            << "pub_rss_peak_mb,sub_rss_peak_mb,system_ram_mb,gpu_util_pct\n";
+            << "pub_rss_peak_mb,sub_rss_peak_mb,system_ram_mb,"
+            << "gpu_util_pct,gpu_freq_mhz,emc_util_pct,emc_freq_mhz,cpu_temp_c,gpu_temp_c\n";
       }
       csv << backend << ","
           << size_bytes << ","
@@ -575,7 +597,32 @@ void CudaImageSubscriberNode::write_summary_report(
           << std::fixed << std::setprecision(1) << sys_summary.system_ram_mean_mb << ",";
 
       if (sys_summary.gpu_available) {
-        csv << std::fixed << std::setprecision(1) << sys_summary.gpu_util_mean_pct << "\n";
+        csv << std::fixed << std::setprecision(1) << sys_summary.gpu_util_mean_pct << ",";
+      } else {
+        csv << "N/A,";
+      }
+
+      if (sys_summary.gpu_freq_available) {
+        csv << std::fixed << std::setprecision(0) << sys_summary.gpu_freq_mean_mhz << ",";
+      } else {
+        csv << "N/A,";
+      }
+
+      if (sys_summary.emc_available) {
+        csv << std::fixed << std::setprecision(1) << sys_summary.emc_util_mean_pct << ","
+            << std::fixed << std::setprecision(0) << sys_summary.emc_freq_mean_mhz << ",";
+      } else {
+        csv << "N/A,N/A,";
+      }
+
+      if (sys_summary.cpu_temp_available) {
+        csv << std::fixed << std::setprecision(1) << sys_summary.cpu_temp_mean_c << ",";
+      } else {
+        csv << "N/A,";
+      }
+
+      if (sys_summary.gpu_temp_available) {
+        csv << std::fixed << std::setprecision(1) << sys_summary.gpu_temp_mean_c << "\n";
       } else {
         csv << "N/A\n";
       }

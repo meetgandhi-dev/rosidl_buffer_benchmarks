@@ -167,6 +167,11 @@ def merge_and_print_csv_results(*args, **kwargs):
 
     sys_ram = src.get('system_ram_mb', 'N/A')
     gpu_util = src.get('gpu_util_pct', 'N/A')
+    gpu_freq = src.get('gpu_freq_mhz', 'N/A')
+    emc_util = src.get('emc_util_pct', 'N/A')
+    emc_freq = src.get('emc_freq_mhz', 'N/A')
+    cpu_temp = src.get('cpu_temp_c', 'N/A')
+    gpu_temp = src.get('gpu_temp_c', 'N/A')
 
     def calc_speedup(fb_str, shm_str):
         try:
@@ -201,7 +206,8 @@ def merge_and_print_csv_results(*args, **kwargs):
         'shmem_sub_cpu_mean_pct', 'shmem_sub_cpu_max_pct',
         'fallback_sub_cpu_mean_pct', 'fallback_sub_cpu_max_pct',
         'pub_rss_peak_mb', 'shmem_sub_rss_peak_mb', 'fallback_sub_rss_peak_mb',
-        'system_ram_mb', 'gpu_util_pct',
+        'system_ram_mb', 'gpu_util_pct', 'gpu_freq_mhz',
+        'emc_util_pct', 'emc_freq_mhz', 'cpu_temp_c', 'gpu_temp_c',
     ]
 
     merged_row = [
@@ -223,7 +229,8 @@ def merge_and_print_csv_results(*args, **kwargs):
         str(shmem_sub_cpu_mean), str(shmem_sub_cpu_max),
         str(fallback_sub_cpu_mean), str(fallback_sub_cpu_max),
         str(pub_rss_peak), str(shmem_sub_rss_peak), str(fallback_sub_rss_peak),
-        str(sys_ram), str(gpu_util),
+        str(sys_ram), str(gpu_util), str(gpu_freq),
+        str(emc_util), str(emc_freq), str(cpu_temp), str(gpu_temp),
     ]
 
     file_exists = os.path.exists(csv_file) and os.path.getsize(csv_file) > 0
@@ -299,7 +306,17 @@ def merge_and_print_csv_results(*args, **kwargs):
     fb_rss_str = f'{fallback_sub_rss_peak} MB' if fallback_sub_rss_peak != 'N/A' else 'N/A'
     print(f" {'Subscriber Process RSS':<28} | {shm_rss_str:<22} | {fb_rss_str:<22} | (Peak RSS)")
     print(f" {'System RAM Usage':<28} | {f'{sys_ram} MB':<22} | {f'{sys_ram} MB':<22} |")
-    print(f" {'GPU Utilization':<28} | {f'{gpu_util}':<22} | {f'{gpu_util}':<22} |")
+    if gpu_util != 'N/A':
+        gpu_str = f'{gpu_util}%' + (f' @ {gpu_freq} MHz' if gpu_freq != 'N/A' else '')
+        print(f" {'GPU Util / Freq':<28} | {gpu_str:<22} | {gpu_str:<22} |")
+    if emc_util != 'N/A' or emc_freq != 'N/A':
+        emc_str = f'{emc_util}%' + (f' @ {emc_freq} MHz' if emc_freq != 'N/A' else '')
+        print(f" {'EMC Memory Controller':<28} | {emc_str:<22} | {emc_str:<22} |")
+    if cpu_temp != 'N/A' or gpu_temp != 'N/A':
+        cpu_t_str = f'{cpu_temp} C' if cpu_temp != 'N/A' else 'N/A'
+        gpu_t_str = f'{gpu_temp} C' if gpu_temp != 'N/A' else 'N/A'
+        temp_str = f'CPU: {cpu_t_str} | GPU: {gpu_t_str}'
+        print(f" {'Temperatures':<28} | {temp_str:<22} | {temp_str:<22} |")
     print('=' * 105)
     print(f' Results saved to: {csv_file}\n')
 
