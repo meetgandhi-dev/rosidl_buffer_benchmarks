@@ -27,7 +27,9 @@
 #include "rclcpp/publisher.hpp"
 #include "rclcpp/timer.hpp"
 #include "sensor_msgs/msg/image.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "std_msgs/msg/u_int32.hpp"
+#include "shmem_bb_benchmark/system_monitor.hpp"
 
 namespace shmem_bb_benchmark
 {
@@ -42,9 +44,11 @@ public:
 
 private:
   void publish_timer_callback();
+  void write_publisher_summary(double actual_fps, std::size_t total_sent);
 
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr publisher_;
   rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr count_publisher_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_report_publisher_;
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::TimerBase::SharedPtr shutdown_timer_;
 
@@ -59,12 +63,16 @@ private:
   bool wait_for_subscriber_{false};
   bool auto_exit_{false};
   bool use_shm_{true};
+  std::string summary_csv_path_{""};
 
   std::size_t sequence_{0};
   std::deque<sensor_msgs::msg::Image> message_history_;
 
   std::chrono::steady_clock::time_point benchmark_start_time_{};
   std::chrono::steady_clock::time_point benchmark_end_time_{};
+
+  SystemMonitor proc_monitor_;
+  bool summary_written_{false};
 };
 
 }  // namespace shmem_bb_benchmark

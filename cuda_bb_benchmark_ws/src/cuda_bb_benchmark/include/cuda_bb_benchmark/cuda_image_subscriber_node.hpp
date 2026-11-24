@@ -30,6 +30,7 @@
 #include "rclcpp/subscription.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "std_msgs/msg/u_int32.hpp"
 #include "cuda_bb_benchmark/system_monitor.hpp"
 
@@ -47,9 +48,11 @@ public:
 
 private:
   void image_callback(sensor_msgs::msg::Image::ConstSharedPtr msg);
+  void pub_report_callback(std_msgs::msg::String::ConstSharedPtr msg);
   void write_summary_report(const std::string & backend, uint32_t width, uint32_t height);
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr pub_report_sub_;
   rclcpp::TimerBase::SharedPtr watchdog_timer_;
   rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr count_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr backend_valid_pub_;
@@ -72,7 +75,9 @@ private:
   double target_hz_{0.0};
   std::string latency_csv_path_{""};
   std::string summary_csv_path_{""};
-  std::vector<double> latencies_ms_;
+  std::vector<double> latencies_ms_;  // Retained for backward compat (stores buffer-ready latencies)
+  std::vector<double> callback_latencies_ms_;
+  std::vector<double> buffer_ready_latencies_ms_;
 
   std::size_t received_count_{0};
   bool all_valid_{true};
@@ -92,6 +97,15 @@ private:
   std::chrono::steady_clock::time_point sub_last_recv_time_{};
   int64_t pub_first_stamp_ns_{0};
   int64_t pub_last_stamp_ns_{0};
+
+  // Telemetry from Publisher Report
+  double pub_fps_{0.0};
+  std::size_t pub_total_frames_{0};
+  double pub_cpu_mean_pct_{0.0};
+  double pub_cpu_max_pct_{0.0};
+  double pub_rss_mean_mb_{0.0};
+  double pub_rss_peak_mb_{0.0};
+  bool pub_report_received_{false};
 
   // System resource monitor
   SystemMonitor sys_monitor_;

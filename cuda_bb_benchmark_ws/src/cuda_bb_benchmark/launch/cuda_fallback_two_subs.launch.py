@@ -61,12 +61,13 @@ def merge_and_print_csv_results(*args, **kwargs):
 
     cuda_tmp = f'{csv_file}.cuda.tmp'
     fallback_tmp = f'{csv_file}.fallback.tmp'
+    pub_tmp = f'{csv_file}.pub.tmp'
 
-    # Wait briefly for subscriber nodes to finalize writing summary files
-    deadline = time.time() + 2.0
+    # Wait briefly for subscriber and publisher nodes to finalize writing summary files
+    deadline = time.time() + 3.0
     while time.time() < deadline:
         if os.path.exists(cuda_tmp) and os.path.exists(fallback_tmp):
-            time.sleep(0.05)
+            time.sleep(0.1)
             break
         time.sleep(0.1)
 
@@ -84,9 +85,10 @@ def merge_and_print_csv_results(*args, **kwargs):
 
     cuda_data = read_summary(cuda_tmp)
     fallback_data = read_summary(fallback_tmp)
+    pub_data = read_summary(pub_tmp)
 
     # Clean up temporary files
-    for tmp in [cuda_tmp, fallback_tmp]:
+    for tmp in [cuda_tmp, fallback_tmp, pub_tmp]:
         if os.path.exists(tmp):
             try:
                 os.remove(tmp)
@@ -103,117 +105,136 @@ def merge_and_print_csv_results(*args, **kwargs):
     resolution = src.get('resolution', res_fallback)
     size_bytes = src.get('size_bytes', '')
     target_hz = src.get('target_hz', context.launch_configurations.get('rate', ''))
-    frame_cap = src.get('frame_cap', context.launch_configurations.get('max_msgs', ''))
 
-    actual_pub_hz = cuda_data.get('actual_pub_hz', src.get('actual_pub_hz', target_hz)) if cuda_data else '0.0'
-    cuda_recv_hz = cuda_data.get('actual_recv_hz', '0.0') if cuda_data else '0.0'
-    fallback_recv_hz = fallback_data.get('actual_recv_hz', '0.0') if fallback_data else '0.0'
+    actual_pub_fps = pub_data.get('actual_pub_fps', src.get('actual_pub_fps', src.get('actual_pub_hz', target_hz))) if pub_data else src.get('actual_pub_fps', src.get('actual_pub_hz', target_hz))
+    total_published = pub_data.get('total_published_frames', src.get('total_published_frames', src.get('total_sent', 'N/A'))) if pub_data else src.get('total_published_frames', src.get('total_sent', 'N/A'))
 
-    cuda_frames = cuda_data.get('received_frames', '0') if cuda_data else '0'
-    fallback_frames = fallback_data.get('received_frames', '0') if fallback_data else '0'
+    cuda_recv_fps = cuda_data.get('actual_recv_fps', cuda_data.get('actual_recv_hz', '0.0')) if cuda_data else '0.0'
+    fallback_recv_fps = fallback_data.get('actual_recv_fps', fallback_data.get('actual_recv_hz', '0.0')) if fallback_data else '0.0'
 
-    cuda_lost = cuda_data.get('lost_frames', '0') if cuda_data else '0'
-    fallback_lost = fallback_data.get('lost_frames', '0') if fallback_data else '0'
+    cuda_frames = cuda_data.get('total_received_frames', cuda_data.get('received_frames', '0')) if cuda_data else '0'
+    fallback_frames = fallback_data.get('total_received_frames', fallback_data.get('received_frames', '0')) if fallback_data else '0'
 
-    cuda_loss_pct = cuda_data.get('loss_pct', '0.0') if cuda_data else '0.0'
-    fallback_loss_pct = fallback_data.get('loss_pct', '0.0') if fallback_data else '0.0'
+    cuda_lost = cuda_data.get('dropped_frames', cuda_data.get('lost_frames', '0')) if cuda_data else '0'
+    fallback_lost = fallback_data.get('dropped_frames', fallback_data.get('lost_frames', '0')) if fallback_data else '0'
 
-    cuda_p50 = cuda_data.get('p50_latency_ms', '0.0') if cuda_data else '0.0'
-    fallback_p50 = fallback_data.get('p50_latency_ms', '0.0') if fallback_data else '0.0'
+    cuda_loss_pct = cuda_data.get('frame_loss_pct', cuda_data.get('loss_pct', '0.0')) if cuda_data else '0.0'
+    fallback_loss_pct = fallback_data.get('frame_loss_pct', fallback_data.get('loss_pct', '0.0')) if fallback_data else '0.0'
 
-    cuda_p95 = cuda_data.get('p95_latency_ms', '0.0') if cuda_data else '0.0'
-    fallback_p95 = fallback_data.get('p95_latency_ms', '0.0') if fallback_data else '0.0'
+    # Callback entry latencies
+    cuda_cb_p50 = cuda_data.get('cb_p50_latency_ms', cuda_data.get('p50_latency_ms', '0.0')) if cuda_data else '0.0'
+    cuda_cb_p95 = cuda_data.get('cb_p95_latency_ms', cuda_data.get('p95_latency_ms', '0.0')) if cuda_data else '0.0'
+    cuda_cb_p99 = cuda_data.get('cb_p99_latency_ms', cuda_data.get('p99_latency_ms', '0.0')) if cuda_data else '0.0'
+    cuda_cb_mean = cuda_data.get('cb_mean_latency_ms', cuda_data.get('mean_latency_ms', '0.0')) if cuda_data else '0.0'
+    cuda_cb_min = cuda_data.get('cb_min_latency_ms', cuda_data.get('min_latency_ms', '0.0')) if cuda_data else '0.0'
+    cuda_cb_max = cuda_data.get('cb_max_latency_ms', cuda_data.get('max_latency_ms', '0.0')) if cuda_data else '0.0'
+    cuda_cb_std = cuda_data.get('cb_std_dev_ms', cuda_data.get('std_dev_ms', '0.0')) if cuda_data else '0.0'
+    cuda_cb_outliers = cuda_data.get('cb_outliers_3sigma_count', cuda_data.get('outliers_3sigma_count', '0')) if cuda_data else '0'
 
-    cuda_p99 = cuda_data.get('p99_latency_ms', '0.0') if cuda_data else '0.0'
-    fallback_p99 = fallback_data.get('p99_latency_ms', '0.0') if fallback_data else '0.0'
+    # Buffer-ready latencies (after CUDA sync)
+    cuda_br_p50 = cuda_data.get('br_p50_latency_ms', cuda_cb_p50) if cuda_data else '0.0'
+    cuda_br_p95 = cuda_data.get('br_p95_latency_ms', cuda_cb_p95) if cuda_data else '0.0'
+    cuda_br_p99 = cuda_data.get('br_p99_latency_ms', cuda_cb_p99) if cuda_data else '0.0'
+    cuda_br_mean = cuda_data.get('br_mean_latency_ms', cuda_cb_mean) if cuda_data else '0.0'
+    cuda_br_min = cuda_data.get('br_min_latency_ms', cuda_cb_min) if cuda_data else '0.0'
+    cuda_br_max = cuda_data.get('br_max_latency_ms', cuda_cb_max) if cuda_data else '0.0'
+    cuda_br_std = cuda_data.get('br_std_dev_ms', cuda_cb_std) if cuda_data else '0.0'
+    cuda_br_outliers = cuda_data.get('br_outliers_3sigma_count', cuda_cb_outliers) if cuda_data else '0'
 
-    cuda_mean = cuda_data.get('mean_latency_ms', cuda_data.get('avg_latency_ms', '0.0')) if cuda_data else '0.0'
-    fallback_mean = fallback_data.get('mean_latency_ms', fallback_data.get('avg_latency_ms', '0.0')) if fallback_data else '0.0'
+    # Fallback latencies (wire / CPU copy)
+    fallback_p50 = fallback_data.get('br_p50_latency_ms', fallback_data.get('p50_latency_ms', '0.0')) if fallback_data else '0.0'
+    fallback_p95 = fallback_data.get('br_p95_latency_ms', fallback_data.get('p95_latency_ms', '0.0')) if fallback_data else '0.0'
+    fallback_p99 = fallback_data.get('br_p99_latency_ms', fallback_data.get('p99_latency_ms', '0.0')) if fallback_data else '0.0'
+    fallback_mean = fallback_data.get('br_mean_latency_ms', fallback_data.get('mean_latency_ms', fallback_data.get('avg_latency_ms', '0.0'))) if fallback_data else '0.0'
+    fallback_min = fallback_data.get('br_min_latency_ms', fallback_data.get('min_latency_ms', '0.0')) if fallback_data else '0.0'
+    fallback_max = fallback_data.get('br_max_latency_ms', fallback_data.get('max_latency_ms', '0.0')) if fallback_data else '0.0'
+    fallback_std = fallback_data.get('br_std_dev_ms', fallback_data.get('std_dev_ms', '0.0')) if fallback_data else '0.0'
+    fallback_outliers = fallback_data.get('br_outliers_3sigma_count', fallback_data.get('outliers_3sigma_count', '0')) if fallback_data else '0'
 
-    cuda_min = cuda_data.get('min_latency_ms', '0.0') if cuda_data else '0.0'
-    fallback_min = fallback_data.get('min_latency_ms', '0.0') if fallback_data else '0.0'
-
-    cuda_max = cuda_data.get('max_latency_ms', '0.0') if cuda_data else '0.0'
-    fallback_max = fallback_data.get('max_latency_ms', '0.0') if fallback_data else '0.0'
-
-    cuda_std = cuda_data.get('std_dev_ms', '0.0') if cuda_data else '0.0'
-    fallback_std = fallback_data.get('std_dev_ms', '0.0') if fallback_data else '0.0'
-
-    cuda_outliers = cuda_data.get('outliers_3sigma_count', '0') if cuda_data else '0'
-    fallback_outliers = fallback_data.get('outliers_3sigma_count', '0') if fallback_data else '0'
-
-    cuda_cpu_mean = cuda_data.get('cpu_util_mean_pct', 'N/A') if cuda_data else 'N/A'
-    cuda_cpu_max = cuda_data.get('cpu_util_max_pct', 'N/A') if cuda_data else 'N/A'
-    fallback_cpu_mean = fallback_data.get('cpu_util_mean_pct', 'N/A') if fallback_data else 'N/A'
-    fallback_cpu_max = fallback_data.get('cpu_util_max_pct', 'N/A') if fallback_data else 'N/A'
-
-    cuda_rss_mean = cuda_data.get('process_rss_mean_mb', 'N/A') if cuda_data else 'N/A'
-    cuda_rss_peak = cuda_data.get('process_rss_peak_mb', 'N/A') if cuda_data else 'N/A'
-    fallback_rss_mean = fallback_data.get('process_rss_mean_mb', 'N/A') if fallback_data else 'N/A'
-    fallback_rss_peak = fallback_data.get('process_rss_peak_mb', 'N/A') if fallback_data else 'N/A'
-
-    cuda_clock_mean = cuda_data.get('cpu_clock_mean_mhz', 'N/A') if cuda_data else 'N/A'
-    cuda_clock_max = cuda_data.get('cpu_clock_max_mhz', 'N/A') if cuda_data else 'N/A'
-    fallback_clock_mean = fallback_data.get('cpu_clock_mean_mhz', 'N/A') if fallback_data else 'N/A'
-    fallback_clock_max = fallback_data.get('cpu_clock_max_mhz', 'N/A') if fallback_data else 'N/A'
-
-    cuda_power_mean = cuda_data.get('power_mean_w', 'N/A') if cuda_data else 'N/A'
-    cuda_power_max = cuda_data.get('power_max_w', 'N/A') if cuda_data else 'N/A'
-    fallback_power_mean = fallback_data.get('power_mean_w', 'N/A') if fallback_data else 'N/A'
-    fallback_power_max = fallback_data.get('power_max_w', 'N/A') if fallback_data else 'N/A'
-
-    def calc_speedup(fb_str, cuda_str):
+    def calc_speedup(fb_str, cu_str):
         try:
             fb = float(fb_str)
-            cu = float(cuda_str)
+            cu = float(cu_str)
             if cu > 0.0:
                 return f'{fb / cu:.2f}x'
         except (ValueError, TypeError):
             pass
         return 'N/A'
 
-    p50_speedup = calc_speedup(fallback_p50, cuda_p50)
-    p99_speedup = calc_speedup(fallback_p99, cuda_p99)
-    mean_speedup = calc_speedup(fallback_mean, cuda_mean)
+    p50_speedup = calc_speedup(fallback_p50, cuda_br_p50)
+    p95_speedup = calc_speedup(fallback_p95, cuda_br_p95)
+    p99_speedup = calc_speedup(fallback_p99, cuda_br_p99)
+    mean_speedup = calc_speedup(fallback_mean, cuda_br_mean)
+
+    # CUDA sync overhead
+    cuda_sync_overhead = 'N/A'
+    try:
+        cb_m = float(cuda_cb_mean)
+        br_m = float(cuda_br_mean)
+        cuda_sync_overhead = f'{max(0.0, br_m - cb_m):.3f} ms'
+    except (ValueError, TypeError):
+        pass
+
+    # Resource telemetry
+    pub_cpu_mean = pub_data.get('pub_cpu_mean_pct', src.get('pub_cpu_mean_pct', 'N/A')) if pub_data else src.get('pub_cpu_mean_pct', 'N/A')
+    pub_cpu_max = pub_data.get('pub_cpu_max_pct', src.get('pub_cpu_max_pct', 'N/A')) if pub_data else src.get('pub_cpu_max_pct', 'N/A')
+
+    cuda_sub_cpu_mean = cuda_data.get('sub_cpu_mean_pct', cuda_data.get('cpu_util_mean_pct', 'N/A')) if cuda_data else 'N/A'
+    cuda_sub_cpu_max = cuda_data.get('sub_cpu_max_pct', cuda_data.get('cpu_util_max_pct', 'N/A')) if cuda_data else 'N/A'
+    fallback_sub_cpu_mean = fallback_data.get('sub_cpu_mean_pct', fallback_data.get('cpu_util_mean_pct', 'N/A')) if fallback_data else 'N/A'
+    fallback_sub_cpu_max = fallback_data.get('sub_cpu_max_pct', fallback_data.get('cpu_util_max_pct', 'N/A')) if fallback_data else 'N/A'
+
+    pub_rss_peak = pub_data.get('pub_rss_peak_mb', src.get('pub_rss_peak_mb', 'N/A')) if pub_data else src.get('pub_rss_peak_mb', 'N/A')
+    cuda_sub_rss_peak = cuda_data.get('sub_rss_peak_mb', cuda_data.get('process_rss_peak_mb', 'N/A')) if cuda_data else 'N/A'
+    fallback_sub_rss_peak = fallback_data.get('sub_rss_peak_mb', fallback_data.get('process_rss_peak_mb', 'N/A')) if fallback_data else 'N/A'
+
+    sys_ram = src.get('system_ram_mb', 'N/A')
+    gpu_util = src.get('gpu_util_pct', 'N/A')
 
     merged_header = [
-        'resolution', 'size_bytes', 'target_hz', 'actual_pub_hz',
-        'cuda_recv_hz', 'fallback_recv_hz',
-        'cuda_frames', 'fallback_frames',
+        'resolution', 'size_bytes', 'target_hz', 'actual_pub_fps',
+        'cuda_recv_fps', 'fallback_recv_fps',
+        'total_published_frames',
+        'cuda_received_frames', 'fallback_received_frames',
+        'cuda_dropped_frames', 'fallback_dropped_frames',
         'cuda_loss_pct', 'fallback_loss_pct',
-        'cuda_p50_ms', 'fallback_p50_ms', 'p50_speedup',
-        'cuda_p95_ms', 'fallback_p95_ms',
-        'cuda_p99_ms', 'fallback_p99_ms', 'p99_speedup',
-        'cuda_mean_ms', 'fallback_mean_ms', 'mean_speedup',
-        'cuda_min_ms', 'fallback_min_ms',
-        'cuda_max_ms', 'fallback_max_ms',
-        'cuda_std_ms', 'fallback_std_ms',
-        'cuda_outliers', 'fallback_outliers',
-        'cuda_cpu_mean_pct', 'fallback_cpu_mean_pct',
-        'cuda_cpu_max_pct', 'fallback_cpu_max_pct',
-        'cuda_rss_peak_mb', 'fallback_rss_peak_mb',
-        'cuda_clock_mean_mhz', 'fallback_clock_mean_mhz',
-        'cuda_power_mean_w', 'fallback_power_mean_w',
+        'cuda_cb_p50_ms', 'cuda_cb_p95_ms', 'cuda_cb_p99_ms', 'cuda_cb_mean_ms', 'cuda_cb_min_ms', 'cuda_cb_max_ms', 'cuda_cb_std_ms', 'cuda_cb_outliers',
+        'cuda_br_p50_ms', 'fallback_p50_ms', 'p50_speedup',
+        'cuda_br_p95_ms', 'fallback_p95_ms',
+        'cuda_br_p99_ms', 'fallback_p99_ms', 'p99_speedup',
+        'cuda_br_mean_ms', 'fallback_mean_ms', 'mean_speedup',
+        'cuda_br_min_ms', 'fallback_min_ms',
+        'cuda_br_max_ms', 'fallback_max_ms',
+        'cuda_br_std_ms', 'fallback_std_ms',
+        'cuda_br_outliers', 'fallback_outliers',
+        'pub_cpu_mean_pct', 'pub_cpu_max_pct',
+        'cuda_sub_cpu_mean_pct', 'cuda_sub_cpu_max_pct',
+        'fallback_sub_cpu_mean_pct', 'fallback_sub_cpu_max_pct',
+        'pub_rss_peak_mb', 'cuda_sub_rss_peak_mb', 'fallback_sub_rss_peak_mb',
+        'system_ram_mb', 'gpu_util_pct',
     ]
 
     merged_row = [
-        resolution, size_bytes, target_hz, str(actual_pub_hz),
-        str(cuda_recv_hz), str(fallback_recv_hz),
+        resolution, size_bytes, target_hz, str(actual_pub_fps),
+        str(cuda_recv_fps), str(fallback_recv_fps),
+        str(total_published),
         str(cuda_frames), str(fallback_frames),
+        str(cuda_lost), str(fallback_lost),
         str(cuda_loss_pct), str(fallback_loss_pct),
-        str(cuda_p50), str(fallback_p50), p50_speedup,
-        str(cuda_p95), str(fallback_p95),
-        str(cuda_p99), str(fallback_p99), p99_speedup,
-        str(cuda_mean), str(fallback_mean), mean_speedup,
-        str(cuda_min), str(fallback_min),
-        str(cuda_max), str(fallback_max),
-        str(cuda_std), str(fallback_std),
-        str(cuda_outliers), str(fallback_outliers),
-        str(cuda_cpu_mean), str(fallback_cpu_mean),
-        str(cuda_cpu_max), str(fallback_cpu_max),
-        str(cuda_rss_peak), str(fallback_rss_peak),
-        str(cuda_clock_mean), str(fallback_clock_mean),
-        str(cuda_power_mean), str(fallback_power_mean),
+        str(cuda_cb_p50), str(cuda_cb_p95), str(cuda_cb_p99), str(cuda_cb_mean), str(cuda_cb_min), str(cuda_cb_max), str(cuda_cb_std), str(cuda_cb_outliers),
+        str(cuda_br_p50), str(fallback_p50), p50_speedup,
+        str(cuda_br_p95), str(fallback_p95),
+        str(cuda_br_p99), str(fallback_p99), p99_speedup,
+        str(cuda_br_mean), str(fallback_mean), mean_speedup,
+        str(cuda_br_min), str(fallback_min),
+        str(cuda_br_max), str(fallback_max),
+        str(cuda_br_std), str(fallback_std),
+        str(cuda_br_outliers), str(fallback_outliers),
+        str(pub_cpu_mean), str(pub_cpu_max),
+        str(cuda_sub_cpu_mean), str(cuda_sub_cpu_max),
+        str(fallback_sub_cpu_mean), str(fallback_sub_cpu_max),
+        str(pub_rss_peak), str(cuda_sub_rss_peak), str(fallback_sub_rss_peak),
+        str(sys_ram), str(gpu_util),
     ]
 
     file_exists = os.path.exists(csv_file) and os.path.getsize(csv_file) > 0
@@ -240,26 +261,40 @@ def merge_and_print_csv_results(*args, **kwargs):
     print('\n' + '=' * 105)
     print(f' CUDA ZERO-COPY vs CPU FALLBACK BENCHMARK SUMMARY  [{resolution} @ {target_hz} Hz]')
     print('=' * 105)
-    print(f" {'Metric':<26} | {'CUDA (Zero-Copy)':<22} | {'Fallback (CPU / Wire)':<22} | {'Speedup / Ratio'}")
+    print(f" {'Metric':<28} | {'CUDA (Zero-Copy)':<22} | {'Fallback (CPU / Wire)':<22} | {'Speedup / Ratio'}")
     print('-' * 105)
-    print(f" {'Actual Publishing Rate':<26} | {actual_pub_hz + ' Hz':<22} | {actual_pub_hz + ' Hz':<22} | Target: {target_hz} Hz")
-    print(f" {'Actual Receiving Rate':<26} | {cuda_recv_hz + ' Hz':<22} | {fallback_recv_hz + ' Hz':<22} |")
-    print(f" {'Measured Frames':<26} | {cuda_frames:<22} | {fallback_frames:<22} |")
-    print(f" {'Lost Frames (Loss %)':<26} | {f'{cuda_lost} ({cuda_loss_pct}%)':<22} | {f'{fallback_lost} ({fallback_loss_pct}%)':<22} |")
+    print(f" {'Actual Publishing Rate':<28} | {str(actual_pub_fps) + ' FPS':<22} | {str(actual_pub_fps) + ' FPS':<22} | Target: {target_hz} Hz")
+    print(f" {'Actual Receiving Rate':<28} | {str(cuda_recv_fps) + ' FPS':<22} | {str(fallback_recv_fps) + ' FPS':<22} |")
+    print(f" {'Total Published Frames':<28} | {str(total_published):<22} | {str(total_published):<22} |")
+    print(f" {'Received Measured Frames':<28} | {str(cuda_frames):<22} | {str(fallback_frames):<22} |")
+    print(f" {'Dropped Frames (Loss %)':<28} | {f'{cuda_lost} ({cuda_loss_pct}%)':<22} | {f'{fallback_lost} ({fallback_loss_pct}%)':<22} |")
     print('-' * 105)
-    print(f" {'P50 Latency (Median)':<26} | {cuda_p50 + ' ms':<22} | {fallback_p50 + ' ms':<22} | {p50_speedup}")
-    print(f" {'P95 Latency':<26} | {cuda_p95 + ' ms':<22} | {fallback_p95 + ' ms':<22} |")
-    print(f" {'P99 Latency':<26} | {cuda_p99 + ' ms':<22} | {fallback_p99 + ' ms':<22} | {p99_speedup}")
-    print(f" {'Mean Latency':<26} | {cuda_mean + ' ms':<22} | {fallback_mean + ' ms':<22} | {mean_speedup}")
-    print(f" {'Min Latency':<26} | {cuda_min + ' ms':<22} | {fallback_min + ' ms':<22} |")
-    print(f" {'Max Latency':<26} | {cuda_max + ' ms':<22} | {fallback_max + ' ms':<22} |")
-    print(f" {'Std Dev (Jitter)':<26} | {cuda_std + ' ms':<22} | {fallback_std + ' ms':<22} |")
-    print(f" {'Outliers (> 3-sigma)':<26} | {cuda_outliers:<22} | {fallback_outliers:<22} |")
+    print(" [1] Subscriber Callback Entry Latency (Pub-to-Callback Entry):")
+    print(f" {'  P50 / P95 / P99':<28} | {f'{cuda_cb_p50} / {cuda_cb_p95} / {cuda_cb_p99} ms':<22} | {f'{fallback_p50} / {fallback_p95} / {fallback_p99} ms':<22} |")
+    print(f" {'  Mean [Min, Max] Latency':<28} | {f'{cuda_cb_mean} [{cuda_cb_min}, {cuda_cb_max}]':<22} | {f'{fallback_mean} [{fallback_min}, {fallback_max}]':<22} |")
+    print(f" {'  Std Dev (Jitter)':<28} | {str(cuda_cb_std) + ' ms':<22} | {str(fallback_std) + ' ms':<22} |")
+    print(f" {'  Outliers (> 3-sigma)':<28} | {str(cuda_cb_outliers) + ' frames':<22} | {str(fallback_outliers) + ' frames':<22} |")
     print('-' * 105)
-    print(f" {'System CPU Util (Mean/Max)':<26} | {f'{cuda_cpu_mean}% / {cuda_cpu_max}%':<22} | {f'{fallback_cpu_mean}% / {fallback_cpu_max}%':<22} |")
-    print(f" {'Process RSS (Peak)':<26} | {f'{cuda_rss_peak} MB':<22} | {f'{fallback_rss_peak} MB':<22} |")
-    print(f" {'CPU Clock (Mean/Max)':<26} | {f'{cuda_clock_mean} / {cuda_clock_max} MHz':<22} | {f'{fallback_clock_mean} / {fallback_clock_max} MHz':<22} |")
-    print(f" {'Power Draw (Mean/Max)':<26} | {f'{cuda_power_mean} / {cuda_power_max} W':<22} | {f'{fallback_power_mean} / {fallback_power_max} W':<22} |")
+    print(" [2] Buffer-Ready Latency (Pub-to-CUDA Synchronized Buffer Ready):")
+    print(f" {'  P50 Latency (Median)':<28} | {str(cuda_br_p50) + ' ms':<22} | {str(fallback_p50) + ' ms':<22} | {p50_speedup}")
+    print(f" {'  P95 Latency':<28} | {str(cuda_br_p95) + ' ms':<22} | {str(fallback_p95) + ' ms':<22} |")
+    print(f" {'  P99 Latency (Tail)':<28} | {str(cuda_br_p99) + ' ms':<22} | {str(fallback_p99) + ' ms':<22} | {p99_speedup}")
+    print(f" {'  Mean Latency':<28} | {str(cuda_br_mean) + ' ms':<22} | {str(fallback_mean) + ' ms':<22} | {mean_speedup}")
+    print(f" {'  Min Latency':<28} | {str(cuda_br_min) + ' ms':<22} | {str(fallback_min) + ' ms':<22} |")
+    print(f" {'  Max Latency':<28} | {str(cuda_br_max) + ' ms':<22} | {str(fallback_max) + ' ms':<22} |")
+    print(f" {'  Std Dev (Jitter)':<28} | {str(cuda_br_std) + ' ms':<22} | {str(fallback_std) + ' ms':<22} |")
+    print(f" {'  Outliers (> 3-sigma)':<28} | {str(cuda_br_outliers) + ' frames':<22} | {str(fallback_outliers) + ' frames':<22} | (Never discarded)")
+    print(f" {'  CUDA Sync Overhead':<28} | {cuda_sync_overhead:<22} | {'0.000 ms (N/A)':<22} | Stream sync time")
+    print('-' * 105)
+    print(" [3] System Resource Telemetry:")
+    print(f" {'  Publisher CPU Util':<28} | Mean: {pub_cpu_mean}% | Max: {pub_cpu_max}% (Dedicated process)")
+    print(f" {'  Subscriber CPU Util':<28} | CUDA: {cuda_sub_cpu_mean}% (Max {cuda_sub_cpu_max}%) | Fallback: {fallback_sub_cpu_mean}% (Max {fallback_sub_cpu_max}%)")
+    print(f" {'  Process Peak RSS':<28} | Pub: {pub_rss_peak} MB | CUDA Sub: {cuda_sub_rss_peak} MB | Fallback Sub: {fallback_sub_rss_peak} MB")
+    print(f" {'  System RAM Used':<28} | {sys_ram} MB")
+    if gpu_util != 'N/A':
+        print(f" {'  GPU Utilization':<28} | {gpu_util}%")
+    else:
+        print(f" {'  GPU Utilization':<28} | N/A (nvidia-smi not available or no NVIDIA GPU)")
     print('=' * 105)
     print(f' Results saved to: {csv_file}\n')
 
@@ -306,6 +341,7 @@ def generate_launch_description():
 
     cuda_tmp_csv = PythonExpression(["'", LaunchConfiguration('csv_path'), ".cuda.tmp'"])
     fallback_tmp_csv = PythonExpression(["'", LaunchConfiguration('csv_path'), ".fallback.tmp'"])
+    pub_tmp_csv = PythonExpression(["'", LaunchConfiguration('csv_path'), ".pub.tmp'"])
 
     cuda_subscriber_node = Node(
         package='cuda_bb_benchmark',
@@ -366,6 +402,7 @@ def generate_launch_description():
             'history_depth': LaunchConfiguration('history_depth'),
             'max_messages': LaunchConfiguration('max_msgs'),
             'warmup_messages': LaunchConfiguration('warmup_msgs'),
+            'summary_csv_path': pub_tmp_csv,
             'auto_exit': auto_exit_expr,
             'cuda_device_id': LaunchConfiguration('cuda_device_id'),
         }],

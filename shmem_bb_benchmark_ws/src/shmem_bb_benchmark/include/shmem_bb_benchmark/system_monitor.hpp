@@ -15,15 +15,14 @@
 #ifndef SHMEM_BB_BENCHMARK__SYSTEM_MONITOR_HPP_
 #define SHMEM_BB_BENCHMARK__SYSTEM_MONITOR_HPP_
 
+#include <unistd.h>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
-#include <dirent.h>
 #include <fstream>
 #include <iostream>
 #include <mutex>
-#include <numeric>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -34,34 +33,22 @@ namespace shmem_bb_benchmark
 
 struct SystemMetricsSample
 {
-  double cpu_util_pct{0.0};
+  double process_cpu_pct{0.0};
   double process_rss_mb{0.0};
+  double process_rss_peak_mb{0.0};
   double system_ram_used_mb{0.0};
-  double cpu_clock_avg_mhz{0.0};
-  double cpu_clock_max_mhz{0.0};
-  double power_watts{0.0};
-  bool power_valid{false};
   double gpu_util_pct{0.0};
-  double gpu_clock_mhz{0.0};
-  double gpu_power_watts{0.0};
   bool gpu_valid{false};
 };
 
 struct SystemMetricsSummary
 {
-  double cpu_util_mean_pct{0.0};
-  double cpu_util_max_pct{0.0};
+  double process_cpu_mean_pct{0.0};
+  double process_cpu_max_pct{0.0};
   double process_rss_mean_mb{0.0};
   double process_rss_peak_mb{0.0};
   double system_ram_mean_mb{0.0};
-  double cpu_clock_mean_mhz{0.0};
-  double cpu_clock_max_mhz{0.0};
-  double power_mean_watts{0.0};
-  double power_max_watts{0.0};
-  bool power_available{false};
   double gpu_util_mean_pct{0.0};
-  double gpu_clock_mean_mhz{0.0};
-  double gpu_power_mean_watts{0.0};
   bool gpu_available{false};
 };
 
@@ -109,64 +96,46 @@ public:
     std::lock_guard<std::mutex> lock(mutex_);
     SystemMetricsSummary summary;
     if (samples_.empty()) {
+      // Fallback: collect at least one instantaneous sample
+      double rss = 0.0, peak = 0.0;
+      read_process_rss_mb(rss, peak);
+      summary.process_rss_mean_mb = rss;
+      summary.process_rss_peak_mb = peak;
+      summary.system_ram_mean_mb = read_system_ram_used_mb();
       return summary;
     }
 
     double sum_cpu = 0.0, max_cpu = 0.0;
     double sum_rss = 0.0, peak_rss = 0.0;
     double sum_sys_ram = 0.0;
-    double sum_clock = 0.0, max_clock = 0.0;
-    double sum_power = 0.0, max_power = 0.0;
-    std::size_t power_count = 0;
-    double sum_gpu_util = 0.0, sum_gpu_clock = 0.0, sum_gpu_power = 0.0;
+    double sum_gpu = 0.0;
     std::size_t gpu_count = 0;
 
     for (const auto & s : samples_) {
-      sum_cpu += s.cpu_util_pct;
-      max_cpu = std::max(max_cpu, s.cpu_util_pct);
+      sum_cpu += s.process_cpu_pct;
+      max_cpu = std::max(max_cpu, s.process_cpu_pct);
 
       sum_rss += s.process_rss_mb;
-      peak_rss = std::max(peak_rss, s.process_rss_mb);
+      peak_rss = std::max(peak_rss, s.process_rss_peak_mb);
 
       sum_sys_ram += s.system_ram_used_mb;
 
-      sum_clock += s.cpu_clock_avg_mhz;
-      max_clock = std::max(max_clock, s.cpu_clock_max_mhz);
-
-      if (s.power_valid) {
-        sum_power += s.power_watts;
-        max_power = std::max(max_power, s.power_watts);
-        ++power_count;
-      }
-
       if (s.gpu_valid) {
-        sum_gpu_util += s.gpu_util_pct;
-        sum_gpu_clock += s.gpu_clock_mhz;
-        sum_gpu_power += s.gpu_power_watts;
+        sum_gpu += s.gpu_util_pct;
         ++gpu_count;
       }
     }
 
     const double n = static_cast<double>(samples_.size());
-    summary.cpu_util_mean_pct = sum_cpu / n;
-    summary.cpu_util_max_pct = max_cpu;
+    summary.process_cpu_mean_pct = sum_cpu / n;
+    summary.process_cpu_max_pct = max_cpu;
     summary.process_rss_mean_mb = sum_rss / n;
     summary.process_rss_peak_mb = peak_rss;
     summary.system_ram_mean_mb = sum_sys_ram / n;
-    summary.cpu_clock_mean_mhz = sum_clock / n;
-    summary.cpu_clock_max_mhz = max_clock;
-
-    if (power_count > 0) {
-      summary.power_available = true;
-      summary.power_mean_watts = sum_power / static_cast<double>(power_count);
-      summary.power_max_watts = max_power;
-    }
 
     if (gpu_count > 0) {
       summary.gpu_available = true;
-      summary.gpu_util_mean_pct = sum_gpu_util / static_cast<double>(gpu_count);
-      summary.gpu_clock_mean_mhz = sum_gpu_clock / static_cast<double>(gpu_count);
-      summary.gpu_power_mean_watts = sum_gpu_power / static_cast<double>(gpu_count);
+      summary.gpu_util_mean_pct = sum_gpu / static_cast<double>(gpu_count);
     }
 
     return summary;
@@ -175,8 +144,31 @@ public:
 private:
   void init_baseline()
   {
-    read_cpu_ticks(prev_idle_ticks_, prev_total_ticks_);
-    prev_time_ = std::chrono::steady_clock::now();
+    read_process_cpu_ticks(prev_proc_ticks_);
+    uint64_t idle = 0;
+    read_cpu_ticks(idle, prev_total_ticks_);
+  }
+
+  static bool read_process_cpu_ticks(uint64_t & proc_ticks)
+  {
+    proc_ticks = 0;
+    std::ifstream file("/proc/self/stat");
+    if (!file.is_open()) return false;
+    std::string line;
+    if (!std::getline(file, line)) return false;
+    auto last_paren = line.rfind(')');
+    if (last_paren == std::string::npos || last_paren + 2 >= line.size()) return false;
+    std::istringstream ss(line.substr(last_paren + 2));
+    char state;
+    int ppid, pgrp, session, tty_nr, tpgid;
+    unsigned int flags;
+    uint64_t minflt, cminflt, majflt, cmajflt, utime, stime;
+    if (ss >> state >> ppid >> pgrp >> session >> tty_nr >> tpgid >> flags
+           >> minflt >> cminflt >> majflt >> cmajflt >> utime >> stime) {
+      proc_ticks = utime + stime;
+      return true;
+    }
+    return false;
   }
 
   static void read_cpu_ticks(uint64_t & idle, uint64_t & total)
@@ -201,29 +193,54 @@ private:
   {
     SystemMetricsSample sample;
 
-    // 1. CPU Utilization
+    // 1. Process CPU Utilization
+    uint64_t proc_ticks = 0;
+    read_process_cpu_ticks(proc_ticks);
+    const uint64_t delta_proc = (proc_ticks >= prev_proc_ticks_) ? (proc_ticks - prev_proc_ticks_) : 0;
+    prev_proc_ticks_ = proc_ticks;
+
     uint64_t idle_ticks = 0, total_ticks = 0;
     read_cpu_ticks(idle_ticks, total_ticks);
     const uint64_t delta_total = (total_ticks >= prev_total_ticks_) ? (total_ticks - prev_total_ticks_) : 0;
-    const uint64_t delta_idle = (idle_ticks >= prev_idle_ticks_) ? (idle_ticks - prev_idle_ticks_) : 0;
     prev_total_ticks_ = total_ticks;
-    prev_idle_ticks_ = idle_ticks;
 
     if (delta_total > 0) {
-      sample.cpu_util_pct = (1.0 - static_cast<double>(delta_idle) / static_cast<double>(delta_total)) * 100.0;
+      long num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+      if (num_cpus <= 0) num_cpus = 1;
+      sample.process_cpu_pct = 100.0 * (static_cast<double>(delta_proc) / static_cast<double>(delta_total)) * static_cast<double>(num_cpus);
     }
 
-    // 2. RAM (System and Process)
+    // 2. RAM (Process RSS and System RAM)
+    read_process_rss_mb(sample.process_rss_mb, sample.process_rss_peak_mb);
     sample.system_ram_used_mb = read_system_ram_used_mb();
-    sample.process_rss_mb = read_process_rss_mb();
 
-    // 3. CPU Clocks
-    read_cpu_clocks(sample.cpu_clock_avg_mhz, sample.cpu_clock_max_mhz);
-
-    // 4. Power Draw
-    sample.power_valid = read_power_watts(sample.power_watts);
+    // 3. GPU (only if reliably available)
+    sample.gpu_valid = read_gpu_utilization(sample.gpu_util_pct);
 
     return sample;
+  }
+
+  static void read_process_rss_mb(double & current_rss_mb, double & peak_rss_mb)
+  {
+    current_rss_mb = 0.0;
+    peak_rss_mb = 0.0;
+    std::ifstream file("/proc/self/status");
+    if (!file.is_open()) return;
+
+    std::string line;
+    while (std::getline(file, line)) {
+      if (line.rfind("VmRSS:", 0) == 0) {
+        std::istringstream ss(line.substr(6));
+        uint64_t rss_kb = 0;
+        ss >> rss_kb;
+        current_rss_mb = static_cast<double>(rss_kb) / 1024.0;
+      } else if (line.rfind("VmHWM:", 0) == 0) {
+        std::istringstream ss(line.substr(6));
+        uint64_t hwm_kb = 0;
+        ss >> hwm_kb;
+        peak_rss_mb = static_cast<double>(hwm_kb) / 1024.0;
+      }
+    }
   }
 
   static double read_system_ram_used_mb()
@@ -247,143 +264,42 @@ private:
       static_cast<double>(mem_total_kb - mem_avail_kb) / 1024.0 : 0.0;
   }
 
-  static double read_process_rss_mb()
+  static bool read_gpu_utilization(double & gpu_util_pct)
   {
-    std::ifstream file("/proc/self/status");
-    if (!file.is_open()) return 0.0;
-
-    std::string line;
-    while (std::getline(file, line)) {
-      if (line.rfind("VmRSS:", 0) == 0) {
-        std::istringstream ss(line.substr(6));
-        uint64_t rss_kb = 0;
-        ss >> rss_kb;
-        return static_cast<double>(rss_kb) / 1024.0;
-      }
+    gpu_util_pct = 0.0;
+    // Fast non-hanging check for nvidia-smi
+    static bool checked_binary = false;
+    static bool has_nvidia_smi = false;
+    if (!checked_binary) {
+      checked_binary = true;
+      has_nvidia_smi = (std::system("which nvidia-smi >/dev/null 2>&1") == 0);
     }
-    return 0.0;
-  }
-
-  static void read_cpu_clocks(double & avg_mhz, double & max_mhz)
-  {
-    std::vector<double> freqs;
-    // Check /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq
-    for (int cpu = 0; cpu < 256; ++cpu) {
-      std::string path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cpufreq/scaling_cur_freq";
-      std::ifstream file(path);
-      if (!file.is_open()) {
-        if (cpu > 0) break;
-        continue;
-      }
-      uint64_t khz = 0;
-      if (file >> khz && khz > 0) {
-        freqs.push_back(static_cast<double>(khz) / 1000.0);
-      }
+    if (!has_nvidia_smi) {
+      return false;
     }
 
-    if (freqs.empty()) {
-      // Fallback: /proc/cpuinfo
-      std::ifstream file("/proc/cpuinfo");
-      std::string line;
-      while (std::getline(file, line)) {
-        if (line.rfind("cpu MHz", 0) == 0) {
-          auto colon = line.find(':');
-          if (colon != std::string::npos) {
-            std::istringstream ss(line.substr(colon + 1));
-            double mhz = 0.0;
-            if (ss >> mhz) {
-              freqs.push_back(mhz);
-            }
-          }
-        }
+    FILE * pipe = popen("nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null", "r");
+    if (!pipe) return false;
+    char buffer[64];
+    bool ok = false;
+    if (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+      std::istringstream ss(buffer);
+      if (ss >> gpu_util_pct) {
+        ok = true;
       }
     }
-
-    if (!freqs.empty()) {
-      double sum = 0.0, max_f = 0.0;
-      for (double f : freqs) {
-        sum += f;
-        max_f = std::max(max_f, f);
-      }
-      avg_mhz = sum / static_cast<double>(freqs.size());
-      max_mhz = max_f;
-    } else {
-      avg_mhz = 0.0;
-      max_mhz = 0.0;
-    }
-  }
-
-  static bool read_power_watts(double & power_w)
-  {
-    // 1. Direct power_now in /sys/class/power_supply/*/power_now (micro-Watts)
-    DIR * dir = opendir("/sys/class/power_supply");
-    if (dir != nullptr) {
-      struct dirent * entry;
-      while ((entry = readdir(dir)) != nullptr) {
-        if (entry->d_name[0] == '.') continue;
-        std::string p_path = std::string("/sys/class/power_supply/") + entry->d_name + "/power_now";
-        std::ifstream file(p_path);
-        uint64_t uw = 0;
-        if (file.is_open() && file >> uw && uw > 0) {
-          power_w = static_cast<double>(uw) / 1e6;
-          closedir(dir);
-          return true;
-        }
-      }
-      closedir(dir);
-    }
-
-    // 2. Voltage * Current in /sys/class/power_supply/*/uevent
-    dir = opendir("/sys/class/power_supply");
-    if (dir != nullptr) {
-      struct dirent * entry;
-      while ((entry = readdir(dir)) != nullptr) {
-        if (entry->d_name[0] == '.') continue;
-        std::string u_path = std::string("/sys/class/power_supply/") + entry->d_name + "/uevent";
-        std::ifstream file(u_path);
-        if (file.is_open()) {
-          std::string line;
-          double volt_v = 0.0, curr_a = 0.0;
-          while (std::getline(file, line)) {
-            if (line.rfind("POWER_SUPPLY_VOLTAGE_NOW=", 0) == 0) {
-              volt_v = std::stod(line.substr(25)) / 1e6;
-            } else if (line.rfind("POWER_SUPPLY_CURRENT_NOW=", 0) == 0) {
-              curr_a = std::stod(line.substr(25)) / 1e6;
-            }
-          }
-          if (volt_v > 0.0 && curr_a > 0.0) {
-            power_w = volt_v * curr_a;
-            closedir(dir);
-            return true;
-          }
-        }
-      }
-      closedir(dir);
-    }
-
-    // 3. Jetson INA3221 rail monitoring
-    std::ifstream jetson_curr("/sys/bus/i2c/drivers/ina3221x/1-0040/hwmon/hwmon1/curr1_input");
-    std::ifstream jetson_volt("/sys/bus/i2c/drivers/ina3221x/1-0040/hwmon/hwmon1/in1_input");
-    if (jetson_curr.is_open() && jetson_volt.is_open()) {
-      double ma = 0.0, mv = 0.0;
-      if (jetson_curr >> ma && jetson_volt >> mv) {
-        power_w = (ma / 1000.0) * (mv / 1000.0);
-        return true;
-      }
-    }
-
-    return false;
+    pclose(pipe);
+    return ok;
   }
 
   std::atomic<bool> running_{false};
   std::chrono::milliseconds sample_interval_{200};
-  std::thread worker_thread_;
   mutable std::mutex mutex_;
   std::vector<SystemMetricsSample> samples_;
+  std::thread worker_thread_;
 
-  uint64_t prev_idle_ticks_{0};
+  uint64_t prev_proc_ticks_{0};
   uint64_t prev_total_ticks_{0};
-  std::chrono::steady_clock::time_point prev_time_{};
 };
 
 }  // namespace shmem_bb_benchmark

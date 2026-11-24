@@ -71,6 +71,10 @@ CudaImageSubscriberNode::CudaImageSubscriberNode(const rclcpp::NodeOptions & opt
     std::bind(&CudaImageSubscriberNode::image_callback, this, std::placeholders::_1),
     sub_options);
 
+  pub_report_sub_ = create_subscription<std_msgs::msg::String>(
+    topic_name_ + "/pub_report", 10,
+    std::bind(&CudaImageSubscriberNode::pub_report_callback, this, std::placeholders::_1));
+
   if (publish_diagnostics_) {
     count_pub_ = create_publisher<std_msgs::msg::UInt32>(result_prefix_ + "/count", 10);
     backend_valid_pub_ = create_publisher<std_msgs::msg::Bool>(
@@ -127,15 +131,37 @@ CudaImageSubscriberNode::~CudaImageSubscriberNode()
   }
 }
 
+void CudaImageSubscriberNode::pub_report_callback(std_msgs::msg::String::ConstSharedPtr msg)
+{
+  std::istringstream ss(msg->data);
+  std::string token;
+  while (std::getline(ss, token, ';')) {
+    auto eq = token.find('=');
+    if (eq != std::string::npos) {
+      auto key = token.substr(0, eq);
+      auto val = token.substr(eq + 1);
+      try {
+        if (key == "actual_pub_fps") pub_fps_ = std::stod(val);
+        else if (key == "total_published") pub_total_frames_ = std::stoull(val);
+        else if (key == "pub_cpu_mean") pub_cpu_mean_pct_ = std::stod(val);
+        else if (key == "pub_cpu_max") pub_cpu_max_pct_ = std::stod(val);
+        else if (key == "pub_rss_mean") pub_rss_mean_mb_ = std::stod(val);
+        else if (key == "pub_rss_peak") pub_rss_peak_mb_ = std::stod(val);
+      } catch (...) {}
+    }
+  }
+  pub_report_received_ = true;
+}
+
 void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstSharedPtr msg)
 {
   if (!rclcpp::ok()) {
     return;
   }
 
-  const auto steady_now = std::chrono::steady_clock::now();
-  const int64_t sub_steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-    steady_now.time_since_epoch()).count();
+  const auto cb_entry_time = std::chrono::steady_clock::now();
+  const int64_t cb_entry_steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    cb_entry_time.time_since_epoch()).count();
 
   ++received_count_;
 
@@ -184,17 +210,40 @@ void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShare
       received_count_, use_cuda_ ? "cuda" : "cpu", backend.c_str());
   }
 
+  // Buffer readiness & synchronization
+  int64_t buf_ready_steady_ns = cb_entry_steady_ns;
+  std::optional<cuda_buffer_backend::ReadHandle> read_handle;
+  if (backend == "cuda") {
+    try {
+      read_handle = cuda_buffer_backend::from_input_buffer(msg->data, stream_);
+      // Required CUDA synchronization to ensure buffer is ready on device
+      cudaStreamSynchronize(stream_);
+      const auto buf_ready_time = std::chrono::steady_clock::now();
+      buf_ready_steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        buf_ready_time.time_since_epoch()).count();
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR(
+        get_logger(),
+        "Exception importing CUDA buffer on msg #%zu: %s",
+        received_count_, e.what());
+    }
+  } else {
+    // For CPU fallback, data buffer is already in host RAM
+    const auto buf_ready_time = std::chrono::steady_clock::now();
+    buf_ready_steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      buf_ready_time.time_since_epoch()).count();
+  }
+
   bool content_valid = true;
   if (verify_content_) {
     try {
       const std::size_t payload_size = msg->data.size();
       const uint8_t expected_val = generate_sequence_byte(seq);
 
-      if (backend == "cuda") {
-        auto read_handle = cuda_buffer_backend::from_input_buffer(msg->data, stream_);
+      if (backend == "cuda" && read_handle.has_value()) {
         std::vector<uint8_t> host_buffer(payload_size);
         cudaMemcpyAsync(
-          host_buffer.data(), read_handle.get_ptr(), payload_size,
+          host_buffer.data(), read_handle->get_ptr(), payload_size,
           cudaMemcpyDeviceToHost, stream_);
         cudaStreamSynchronize(stream_);
 
@@ -225,7 +274,7 @@ void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShare
       content_valid = false;
       RCLCPP_ERROR(
         get_logger(),
-        "Exception reading buffer on msg #%zu: %s",
+        "Exception verifying buffer on msg #%zu: %s",
         received_count_, e.what());
     }
   }
@@ -237,37 +286,42 @@ void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShare
   }
 
   // Consistent monotonic latency calculation via steady_clock
-  const double latency_ms = (sub_steady_ns >= pub_steady_ns) ?
-    static_cast<double>(sub_steady_ns - pub_steady_ns) / 1000000.0 : 0.0;
+  const double cb_latency_ms = (cb_entry_steady_ns >= pub_steady_ns) ?
+    static_cast<double>(cb_entry_steady_ns - pub_steady_ns) / 1000000.0 : 0.0;
+  const double buf_ready_latency_ms = (buf_ready_steady_ns >= pub_steady_ns) ?
+    static_cast<double>(buf_ready_steady_ns - pub_steady_ns) / 1000000.0 : 0.0;
+
   const bool is_warmup = (warmup_messages_ > 0 && static_cast<int>(seq) <= warmup_messages_);
 
   if (is_warmup) {
     RCLCPP_INFO(
       get_logger(),
-      "Received warm-up msg #%zu/%d (%zux%zu, %zu B, backend: '%s', latency: %.3f ms, valid: %s) [ignored for benchmark]",
+      "Received warm-up msg #%zu/%d (%zux%zu, %zu B, backend: '%s', cb_lat: %.3f ms, ready_lat: %.3f ms, valid: %s) [ignored for benchmark]",
       seq, warmup_messages_, static_cast<std::size_t>(msg->width),
       static_cast<std::size_t>(msg->height), msg->data.size(), backend.c_str(),
-      latency_ms, (backend_valid && content_valid) ? "YES" : "NO");
+      cb_latency_ms, buf_ready_latency_ms, (backend_valid && content_valid) ? "YES" : "NO");
   } else {
-    if (latencies_ms_.empty()) {
+    if (callback_latencies_ms_.empty()) {
       first_bench_seq_ = seq;
-      sub_first_recv_time_ = steady_now;
+      sub_first_recv_time_ = cb_entry_time;
       pub_first_stamp_ns_ = pub_steady_ns;
       sys_monitor_.start();
     }
     last_bench_seq_ = seq;
-    sub_last_recv_time_ = steady_now;
+    sub_last_recv_time_ = cb_entry_time;
     pub_last_stamp_ns_ = pub_steady_ns;
 
-    latencies_ms_.push_back(latency_ms);
-    const std::size_t bench_idx = latencies_ms_.size();
+    callback_latencies_ms_.push_back(cb_latency_ms);
+    buffer_ready_latencies_ms_.push_back(buf_ready_latency_ms);
+    latencies_ms_.push_back(buf_ready_latency_ms);
+    const std::size_t bench_idx = callback_latencies_ms_.size();
 
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 1000,
-      "Received msg #%zu [BENCHMARK %zu/%d] (%zux%zu, %zu B, backend: '%s', latency: %.3f ms, valid: %s)",
+      "Received msg #%zu [BENCHMARK %zu/%d] (%zux%zu, %zu B, backend: '%s', cb_lat: %.3f ms, ready_lat: %.3f ms, valid: %s)",
       seq, bench_idx, max_messages_, static_cast<std::size_t>(msg->width),
       static_cast<std::size_t>(msg->height), msg->data.size(), backend.c_str(),
-      latency_ms, (backend_valid && content_valid) ? "YES" : "NO");
+      cb_latency_ms, buf_ready_latency_ms, (backend_valid && content_valid) ? "YES" : "NO");
   }
 
   if (publish_diagnostics_) {
@@ -318,68 +372,93 @@ void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShare
 void CudaImageSubscriberNode::write_summary_report(
   const std::string & backend, uint32_t width, uint32_t height)
 {
-  if (summary_written_ || latencies_ms_.empty()) {
+  if (summary_written_ || callback_latencies_ms_.empty()) {
     return;
   }
   summary_written_ = true;
   sys_monitor_.stop();
   const auto sys_summary = sys_monitor_.get_summary();
 
-  auto samples = latencies_ms_;
-  std::sort(samples.begin(), samples.end());
-
-  auto percentile = [&samples](double p) -> double {
-    if (samples.empty()) {return 0.0;}
-    if (samples.size() == 1) {return samples[0];}
-    double rank = p * static_cast<double>(samples.size() - 1);
-    std::size_t lower = static_cast<std::size_t>(rank);
-    std::size_t upper = std::min(lower + 1, samples.size() - 1);
-    double weight = rank - static_cast<double>(lower);
-    return samples[lower] * (1.0 - weight) + samples[upper] * weight;
+  struct LatencyStats
+  {
+    double min_ms{0.0};
+    double max_ms{0.0};
+    double p50_ms{0.0};
+    double p95_ms{0.0};
+    double p99_ms{0.0};
+    double mean_ms{0.0};
+    double std_dev_ms{0.0};
+    std::size_t outliers_count{0};
   };
 
-  const double min_ms = samples.empty() ? 0.0 : samples.front();
-  const double max_ms = samples.empty() ? 0.0 : samples.back();
-  const double p50_ms = percentile(0.50);
-  const double p95_ms = percentile(0.95);
-  const double p99_ms = percentile(0.99);
-
-  double sum = 0.0;
-  for (double v : samples) {
-    sum += v;
-  }
-  const double mean_ms = samples.empty() ? 0.0 : (sum / samples.size());
-  double sq_diff = 0.0;
-  for (double v : samples) {
-    sq_diff += (v - mean_ms) * (v - mean_ms);
-  }
-  const double std_dev_ms = samples.empty() ? 0.0 : std::sqrt(sq_diff / samples.size());
-
-  // Outlier detection: frames exceeding 3-sigma
-  const double outlier_threshold_ms = mean_ms + 3.0 * std_dev_ms;
-  std::size_t outlier_count = 0;
-  for (double v : samples) {
-    if (v > outlier_threshold_ms) {
-      ++outlier_count;
+  auto calc_stats = [](const std::vector<double> & in_samples) -> LatencyStats {
+    LatencyStats st;
+    if (in_samples.empty()) {
+      return st;
     }
-  }
+    auto s = in_samples;
+    std::sort(s.begin(), s.end());
 
-  const std::size_t measured_frames = latencies_ms_.size();
+    auto pct = [&s](double p) -> double {
+      if (s.empty()) {return 0.0;}
+      if (s.size() == 1) {return s[0];}
+      double rank = p * static_cast<double>(s.size() - 1);
+      std::size_t lower = static_cast<std::size_t>(rank);
+      std::size_t upper = std::min(lower + 1, s.size() - 1);
+      double weight = rank - static_cast<double>(lower);
+      return s[lower] * (1.0 - weight) + s[upper] * weight;
+    };
+
+    st.min_ms = s.front();
+    st.max_ms = s.back();
+    st.p50_ms = pct(0.50);
+    st.p95_ms = pct(0.95);
+    st.p99_ms = pct(0.99);
+
+    double sum = 0.0;
+    for (double v : s) {
+      sum += v;
+    }
+    st.mean_ms = sum / s.size();
+
+    double sq_diff = 0.0;
+    for (double v : s) {
+      sq_diff += (v - st.mean_ms) * (v - st.mean_ms);
+    }
+    st.std_dev_ms = std::sqrt(sq_diff / s.size());
+
+    const double thresh = st.mean_ms + 3.0 * st.std_dev_ms;
+    for (double v : s) {
+      if (v > thresh) {
+        ++st.outliers_count;
+      }
+    }
+    return st;
+  };
+
+  const auto cb_stats = calc_stats(callback_latencies_ms_);
+  const auto br_stats = calc_stats(buffer_ready_latencies_ms_);
+  const double sync_overhead_mean_ms = (br_stats.mean_ms >= cb_stats.mean_ms) ?
+    (br_stats.mean_ms - cb_stats.mean_ms) : 0.0;
+
+  const std::size_t measured_frames = callback_latencies_ms_.size();
   const std::size_t size_bytes = static_cast<std::size_t>(width) * height;
 
   // Frame loss calculation
   const std::size_t total_sent_in_window = (last_bench_seq_ >= first_bench_seq_) ?
     (last_bench_seq_ - first_bench_seq_ + 1) : measured_frames;
-  const std::size_t lost_frames = (total_sent_in_window > measured_frames) ?
-    (total_sent_in_window - measured_frames) : 0;
-  const double frame_loss_pct = (total_sent_in_window > 0) ?
-    (100.0 * static_cast<double>(lost_frames) / static_cast<double>(total_sent_in_window)) : 0.0;
+  const std::size_t total_published = (pub_total_frames_ > 0) ? pub_total_frames_ : total_sent_in_window;
+  const std::size_t lost_frames = (total_published > measured_frames) ?
+    (total_published - measured_frames) : 0;
+  const double frame_loss_pct = (total_published > 0) ?
+    (100.0 * static_cast<double>(lost_frames) / static_cast<double>(total_published)) : 0.0;
 
-  // Actual Publishing FPS (based on steady_clock publisher timestamp delta)
+  // Actual Publishing FPS (prefer publisher report if available, else monotonic delta)
   const double pub_duration_s = (pub_last_stamp_ns_ > pub_first_stamp_ns_) ?
     static_cast<double>(pub_last_stamp_ns_ - pub_first_stamp_ns_) / 1e9 : 0.0;
-  const double actual_pub_hz = (pub_duration_s > 0.0 && total_sent_in_window > 1) ?
-    static_cast<double>(total_sent_in_window - 1) / pub_duration_s : target_hz_;
+  const double actual_pub_hz = (pub_fps_ > 0.0) ? pub_fps_ :
+    ((pub_duration_s > 0.0 && total_sent_in_window > 1) ?
+     static_cast<double>(total_sent_in_window - 1) / pub_duration_s : target_hz_);
 
   // Actual Receiving FPS (based on steady_clock subscriber receipt delta)
   const double sub_duration_s = std::chrono::duration<double>(
@@ -391,32 +470,46 @@ void CudaImageSubscriberNode::write_summary_report(
   RCLCPP_INFO(get_logger(), " BENCHMARK SUMMARY REPORT: backend='%s', %ux%u (%zu B)",
     backend.c_str(), width, height, size_bytes);
   RCLCPP_INFO(get_logger(), "--------------------------------------------------------------------------");
-  RCLCPP_INFO(get_logger(), " Throughput:  Target: %.1f Hz | Actual Pub: %.2f Hz | Actual Recv: %.2f Hz",
+  RCLCPP_INFO(get_logger(), " Throughput:  Target: %.1f Hz | Actual Pub: %.2f FPS | Actual Recv: %.2f FPS",
     target_hz_, actual_pub_hz, actual_recv_hz);
-  RCLCPP_INFO(get_logger(), " Frames:      Measured: %zu | Total Sent: %zu | Lost: %zu (%.2f%% loss) | Warm-up: %d",
-    measured_frames, total_sent_in_window, lost_frames, frame_loss_pct, warmup_messages_);
+  RCLCPP_INFO(get_logger(), " Frames:      Published: %zu | Received: %zu | Dropped: %zu (%.2f%% loss) | Warm-up: %d",
+    total_published, measured_frames, lost_frames, frame_loss_pct, warmup_messages_);
   RCLCPP_INFO(get_logger(), " Latency (ms):");
-  RCLCPP_INFO(get_logger(), "   P50:  %.3f | P95: %.3f | P99: %.3f", p50_ms, p95_ms, p99_ms);
-  RCLCPP_INFO(get_logger(), "   Mean: %.3f | Min: %.3f | Max: %.3f | StdDev: %.3f",
-    mean_ms, min_ms, max_ms, std_dev_ms);
-  RCLCPP_INFO(get_logger(), " Outliers:    %zu frame(s) exceeded 3-sigma (%.3f ms) [Max outlier: %.3f ms]",
-    outlier_count, outlier_threshold_ms, max_ms);
+  RCLCPP_INFO(get_logger(), "   [Callback Entry Latency]:");
+  RCLCPP_INFO(get_logger(), "     P50:  %.3f | P95: %.3f | P99: %.3f", cb_stats.p50_ms, cb_stats.p95_ms, cb_stats.p99_ms);
+  RCLCPP_INFO(get_logger(), "     Mean: %.3f | Min: %.3f | Max: %.3f | StdDev: %.3f",
+    cb_stats.mean_ms, cb_stats.min_ms, cb_stats.max_ms, cb_stats.std_dev_ms);
+  RCLCPP_INFO(get_logger(), "     Outliers (> 3-sigma): %zu frame(s)", cb_stats.outliers_count);
+  RCLCPP_INFO(get_logger(), "   [Buffer-Ready Latency (after CUDA sync)]:");
+  RCLCPP_INFO(get_logger(), "     P50:  %.3f | P95: %.3f | P99: %.3f", br_stats.p50_ms, br_stats.p95_ms, br_stats.p99_ms);
+  RCLCPP_INFO(get_logger(), "     Mean: %.3f | Min: %.3f | Max: %.3f | StdDev: %.3f",
+    br_stats.mean_ms, br_stats.min_ms, br_stats.max_ms, br_stats.std_dev_ms);
+  RCLCPP_INFO(get_logger(), "     Outliers (> 3-sigma): %zu frame(s)", br_stats.outliers_count);
+  RCLCPP_INFO(get_logger(), "   [CUDA Sync Overhead]: Mean: %.3f ms", sync_overhead_mean_ms);
   RCLCPP_INFO(get_logger(), " System Resources:");
-  RCLCPP_INFO(get_logger(), "   CPU Util:    Mean: %.1f%% | Max: %.1f%%",
-    sys_summary.cpu_util_mean_pct, sys_summary.cpu_util_max_pct);
-  RCLCPP_INFO(get_logger(), "   RAM Usage:   Process RSS: %.1f MB (Peak: %.1f MB) | System Used: %.1f MB",
-    sys_summary.process_rss_mean_mb, sys_summary.process_rss_peak_mb, sys_summary.system_ram_mean_mb);
-  RCLCPP_INFO(get_logger(), "   CPU Clock:   Mean: %.0f MHz | Max: %.0f MHz",
-    sys_summary.cpu_clock_mean_mhz, sys_summary.cpu_clock_max_mhz);
-  if (sys_summary.power_available) {
-    RCLCPP_INFO(get_logger(), "   Power Draw:  Mean: %.2f W | Max: %.2f W",
-      sys_summary.power_mean_watts, sys_summary.power_max_watts);
+  if (pub_report_received_) {
+    RCLCPP_INFO(get_logger(), "   Publisher CPU:     Mean: %.1f%% | Max: %.1f%%",
+      pub_cpu_mean_pct_, pub_cpu_max_pct_);
   } else {
-    RCLCPP_INFO(get_logger(), "   Power Draw:  N/A (no readable power sensor)");
+    RCLCPP_INFO(get_logger(), "   Publisher CPU:     N/A");
   }
+  RCLCPP_INFO(get_logger(), "   Subscriber CPU:    Mean: %.1f%% | Max: %.1f%%",
+    sys_summary.process_cpu_mean_pct, sys_summary.process_cpu_max_pct);
+  if (pub_report_received_) {
+    RCLCPP_INFO(get_logger(), "   Publisher RSS:     Mean: %.1f MB | Peak: %.1f MB",
+      pub_rss_mean_mb_, pub_rss_peak_mb_);
+  } else {
+    RCLCPP_INFO(get_logger(), "   Publisher RSS:     N/A");
+  }
+  RCLCPP_INFO(get_logger(), "   Subscriber RSS:    Mean: %.1f MB | Peak: %.1f MB",
+    sys_summary.process_rss_mean_mb, sys_summary.process_rss_peak_mb);
+  RCLCPP_INFO(get_logger(), "   System RAM Used:   %.1f MB",
+    sys_summary.system_ram_mean_mb);
   if (sys_summary.gpu_available) {
-    RCLCPP_INFO(get_logger(), "   GPU Util:    Mean: %.1f%% | Clock: %.0f MHz | Power: %.2f W",
-      sys_summary.gpu_util_mean_pct, sys_summary.gpu_clock_mean_mhz, sys_summary.gpu_power_mean_watts);
+    RCLCPP_INFO(get_logger(), "   GPU Utilization:   %.1f%%",
+      sys_summary.gpu_util_mean_pct);
+  } else {
+    RCLCPP_INFO(get_logger(), "   GPU Utilization:   N/A");
   }
   RCLCPP_INFO(get_logger(), "==========================================================================");
 
@@ -428,13 +521,12 @@ void CudaImageSubscriberNode::write_summary_report(
     std::ofstream csv(summary_csv_path_, std::ios::app);
     if (csv.is_open()) {
       if (!exists) {
-        csv << "backend,size_bytes,resolution,target_hz,actual_pub_hz,actual_recv_hz,"
-            << "total_sent,received_frames,lost_frames,loss_pct,mean_latency_ms,"
-            << "min_latency_ms,p50_latency_ms,p95_latency_ms,p99_latency_ms,max_latency_ms,"
-            << "std_dev_ms,outliers_3sigma_count,"
-            << "cpu_util_mean_pct,cpu_util_max_pct,process_rss_mean_mb,process_rss_peak_mb,"
-            << "system_ram_mb,cpu_clock_mean_mhz,cpu_clock_max_mhz,power_mean_w,power_max_w,"
-            << "gpu_util_pct,gpu_clock_mhz,gpu_power_w\n";
+        csv << "backend,size_bytes,resolution,target_hz,actual_pub_fps,actual_recv_fps,"
+            << "total_published_frames,total_received_frames,dropped_frames,frame_loss_pct,"
+            << "cb_mean_latency_ms,cb_min_latency_ms,cb_p50_latency_ms,cb_p95_latency_ms,cb_p99_latency_ms,cb_max_latency_ms,cb_std_dev_ms,cb_outliers_3sigma_count,"
+            << "br_mean_latency_ms,br_min_latency_ms,br_p50_latency_ms,br_p95_latency_ms,br_p99_latency_ms,br_max_latency_ms,br_std_dev_ms,br_outliers_3sigma_count,"
+            << "pub_cpu_mean_pct,pub_cpu_max_pct,sub_cpu_mean_pct,sub_cpu_max_pct,"
+            << "pub_rss_peak_mb,sub_rss_peak_mb,system_ram_mb,gpu_util_pct\n";
       }
       csv << backend << ","
           << size_bytes << ","
@@ -442,40 +534,62 @@ void CudaImageSubscriberNode::write_summary_report(
           << std::fixed << std::setprecision(1) << target_hz_ << ","
           << std::fixed << std::setprecision(2) << actual_pub_hz << ","
           << std::fixed << std::setprecision(2) << actual_recv_hz << ","
-          << total_sent_in_window << ","
+          << total_published << ","
           << measured_frames << ","
           << lost_frames << ","
           << std::fixed << std::setprecision(2) << frame_loss_pct << ","
-          << std::fixed << std::setprecision(3) << mean_ms << ","
-          << std::fixed << std::setprecision(3) << min_ms << ","
-          << std::fixed << std::setprecision(3) << p50_ms << ","
-          << std::fixed << std::setprecision(3) << p95_ms << ","
-          << std::fixed << std::setprecision(3) << p99_ms << ","
-          << std::fixed << std::setprecision(3) << max_ms << ","
-          << std::fixed << std::setprecision(3) << std_dev_ms << ","
-          << outlier_count << ","
-          << std::fixed << std::setprecision(1) << sys_summary.cpu_util_mean_pct << ","
-          << std::fixed << std::setprecision(1) << sys_summary.cpu_util_max_pct << ","
-          << std::fixed << std::setprecision(1) << sys_summary.process_rss_mean_mb << ","
-          << std::fixed << std::setprecision(1) << sys_summary.process_rss_peak_mb << ","
-          << std::fixed << std::setprecision(1) << sys_summary.system_ram_mean_mb << ","
-          << std::fixed << std::setprecision(0) << sys_summary.cpu_clock_mean_mhz << ","
-          << std::fixed << std::setprecision(0) << sys_summary.cpu_clock_max_mhz << ","
-          << std::fixed << std::setprecision(2) << sys_summary.power_mean_watts << ","
-          << std::fixed << std::setprecision(2) << sys_summary.power_max_watts << ","
-          << std::fixed << std::setprecision(1) << (sys_summary.gpu_available ? sys_summary.gpu_util_mean_pct : 0.0) << ","
-          << std::fixed << std::setprecision(0) << (sys_summary.gpu_available ? sys_summary.gpu_clock_mean_mhz : 0.0) << ","
-          << std::fixed << std::setprecision(2) << (sys_summary.gpu_available ? sys_summary.gpu_power_mean_watts : 0.0) << "\n";
+          << std::fixed << std::setprecision(3) << cb_stats.mean_ms << ","
+          << std::fixed << std::setprecision(3) << cb_stats.min_ms << ","
+          << std::fixed << std::setprecision(3) << cb_stats.p50_ms << ","
+          << std::fixed << std::setprecision(3) << cb_stats.p95_ms << ","
+          << std::fixed << std::setprecision(3) << cb_stats.p99_ms << ","
+          << std::fixed << std::setprecision(3) << cb_stats.max_ms << ","
+          << std::fixed << std::setprecision(3) << cb_stats.std_dev_ms << ","
+          << cb_stats.outliers_count << ","
+          << std::fixed << std::setprecision(3) << br_stats.mean_ms << ","
+          << std::fixed << std::setprecision(3) << br_stats.min_ms << ","
+          << std::fixed << std::setprecision(3) << br_stats.p50_ms << ","
+          << std::fixed << std::setprecision(3) << br_stats.p95_ms << ","
+          << std::fixed << std::setprecision(3) << br_stats.p99_ms << ","
+          << std::fixed << std::setprecision(3) << br_stats.max_ms << ","
+          << std::fixed << std::setprecision(3) << br_stats.std_dev_ms << ","
+          << br_stats.outliers_count << ",";
+
+      if (pub_report_received_) {
+        csv << std::fixed << std::setprecision(1) << pub_cpu_mean_pct_ << ","
+            << std::fixed << std::setprecision(1) << pub_cpu_max_pct_ << ",";
+      } else {
+        csv << "N/A,N/A,";
+      }
+
+      csv << std::fixed << std::setprecision(1) << sys_summary.process_cpu_mean_pct << ","
+          << std::fixed << std::setprecision(1) << sys_summary.process_cpu_max_pct << ",";
+
+      if (pub_report_received_) {
+        csv << std::fixed << std::setprecision(1) << pub_rss_peak_mb_ << ",";
+      } else {
+        csv << "N/A,";
+      }
+
+      csv << std::fixed << std::setprecision(1) << sys_summary.process_rss_peak_mb << ","
+          << std::fixed << std::setprecision(1) << sys_summary.system_ram_mean_mb << ",";
+
+      if (sys_summary.gpu_available) {
+        csv << std::fixed << std::setprecision(1) << sys_summary.gpu_util_mean_pct << "\n";
+      } else {
+        csv << "N/A\n";
+      }
     }
   }
 
   if (!latency_csv_path_.empty()) {
     std::ofstream csv(latency_csv_path_);
     if (csv.is_open()) {
-      csv << "frame,size_bytes,latency_ms\n";
-      for (std::size_t i = 0; i < latencies_ms_.size(); ++i) {
+      csv << "frame,size_bytes,callback_latency_ms,buffer_ready_latency_ms\n";
+      for (std::size_t i = 0; i < callback_latencies_ms_.size(); ++i) {
         csv << (i + 1) << "," << size_bytes << ","
-            << std::fixed << std::setprecision(3) << latencies_ms_[i] << "\n";
+            << std::fixed << std::setprecision(3) << callback_latencies_ms_[i] << ","
+            << std::fixed << std::setprecision(3) << buffer_ready_latencies_ms_[i] << "\n";
       }
     }
   }

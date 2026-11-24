@@ -45,42 +45,46 @@ To ensure statistically rigorous, repeatable, and transparent performance compar
 - This eliminates clock drift, NTP adjustments, and leap second artifacts across separate processes on the same host, guaranteeing true nanosecond-accurate latency measurements.
 
 ### 3.2 Warm-Up Frame Exclusion
-- The initial 10 frames (`warmup_messages:=10` by default) are published and received to allow buffer pool memory mapping, DSO registration, and DDS discovery/entity creation to stabilize.
+- The initial frames (`warmup_messages:=10` by default) are published and received to allow buffer pool memory mapping, DSO registration, and DDS discovery/entity creation to stabilize.
 - While warm-up frames are verified for payload integrity, they are **strictly excluded** from all latency, percentile, throughput, and jitter statistics.
 - If `--max-msgs 1000` is requested with 10 warm-up frames, exactly 1010 frames are published, and exactly 1000 benchmark frames are measured.
 
-### 3.3 Multi-Percentile Latency Analysis (Beyond Average Latency)
-Relying solely on average latency masks severe latency spikes caused by queue contention, memory re-allocation, or OS scheduling. The benchmark records and reports:
-- **P50 (Median)**: Represents the typical, nominal performance under sustained load.
-- **P95**: Captures 95th-percentile real-time bounds.
-- **P99 (Tail Latency)**: Exposes tail latency and worst-case performance crucial for real-time robotics and computer vision pipelines.
-- **Mean, Min, Max, and Standard Deviation (Jitter)**: Provides full statistical characterization.
-- Speedup factors are calculated across **P50 Speedup**, **P99 Speedup**, and **Mean Speedup** side-by-side.
+### 3.3 Latency and Throughput Measurements
 
-### 3.4 Frame Tracking, Loss Detection & True Throughput
-- **Sequence Numbering**: Each frame carries a monotonic sequence index (`seq = 1, 2, ...`). The subscriber detects non-contiguous sequence numbers (`seq > last_seq + 1`) to accurately count dropped frames and calculate **Frame Loss Percentage**.
+For every benchmark execution, the following metrics are recorded:
+- **Actual Publishing FPS**: Calculated from publisher monotonic timestamps over the active benchmark window.
+- **Actual Receiving FPS**: Calculated from subscriber monotonic receipt timestamps over the active benchmark window.
+- **Total Published Frames**: Total messages dispatched during the benchmark window.
+- **Total Received Frames**: Messages successfully received and processed.
+- **Dropped Frames**: Missing or skipped frames detected via strictly incrementing sequence numbers.
+- **Frame-Loss Percentage**: `(dropped_frames / total_published_frames) * 100%`.
+- **Latency Distribution**:
+  - **P50 (Median)**: Nominal sustained performance under load.
+  - **P95**: Real-time upper bound.
+  - **P99 (Tail Latency)**: Worst-case latency critical for robotic safety.
+  - **Mean, Minimum, Maximum, and Standard Deviation (Jitter)**.
+- **3-Sigma Outliers**: Number of frames exceeding `mean + 3 * std_dev`. **Outliers are always reported and never discarded**.
 - **No False FPS Assumptions**: Received frame count is **never treated as proof that target FPS was achieved**.
-- **Dual Throughput Measurement**:
-  - **Actual Publishing Rate (FPS)**: Calculated from publisher-side monotonic timestamps over the benchmark window.
-  - **Actual Receiving Rate (FPS)**: Calculated from subscriber-side receipt timestamps over the benchmark window.
 
-### 3.5 Outlier Transparency (3-Sigma Analysis)
-- Latency outliers are **not discarded or clipped**.
-- Every sample is retained in the dataset, and frames exceeding the 3-sigma threshold (`mean + 3 * std_dev`) are counted, reported, and logged with their maximum outlier value.
+### 3.4 CUDA Buffer Backend Latency Separation
 
-### 3.6 System Resource, Clock & Power Monitoring
-High throughput and zero-copy performance must be evaluated in context of hardware resource utilization and power efficiency:
-- **Background Non-Blocking Sampler (`SystemMonitor`)**: Runs on an independent asynchronous thread with negligible overhead (<0.05% CPU), taking periodic snapshots (200 ms interval) during the active benchmark window.
-- **CPU Utilization (%)**: Reads `/proc/stat` delta tick ratios across all cores, calculating both mean utilization and peak spikes during image transport.
-- **Memory & Process RSS (MB)**:
-  - **Process RSS / Peak RSS (`VmRSS`, `VmHWM`)**: Directly tracks subscriber resident memory consumption from `/proc/self/status` to quantify buffer pool footprint (e.g., zero-copy memory mapping vs heap copy).
-  - **System RAM Used (MB)**: Tracks host-level memory pressure from `/proc/meminfo` (`MemTotal - MemAvailable`).
-- **CPU Clock Frequencies (MHz)**: Samples dynamic CPU frequency scaling (`scaling_cur_freq` / `/proc/cpuinfo`) to detect thermal throttling and governor boost behavior (mean and max MHz).
-- **System Power Consumption (Watts)**: Multi-source power detection automatically reads:
-  - Linux `power_supply` subsystem (`power_now` or `voltage_now * current_now` in Watts).
-  - Linux RAPL energy counters (`/sys/class/powercap/intel-rapl*/energy_uj`).
-  - NVIDIA Jetson Tegra INA3221 rail power sensors.
-- **GPU Metrics (NVIDIA Devices)**: If an NVIDIA GPU is present, queries `nvidia-smi` for GPU core utilization (`%`), graphics clock frequency (`MHz`), and GPU power draw (`W`).
+For CUDA benchmarks (`cuda_bb_benchmark`), latency is decomposed to reflect GPU pipeline realities:
+1. **Subscriber Callback Entry Timestamp**: Monotonic timestamp recorded at the exact moment the ROS 2 subscriber callback is entered (`t_cb_entry`).
+2. **Buffer-Ready Timestamp**: Monotonic timestamp recorded immediately after the required CUDA synchronization (`cudaStreamSynchronize`) completes and the buffer is ready for GPU compute (`t_buf_ready`).
+3. **Publisher-to-Buffer-Ready Latency**: End-to-end latency from publish timestamp to GPU buffer readiness.
+4. **Strict Latency Separation**: Callback latency (`t_cb_entry - t_pub`) and buffer-ready latency (`t_buf_ready - t_pub`) are **kept separate** in both console summaries and CSV outputs.
+5. **CUDA Sync Overhead**: Direct measurement of stream synchronization time (`t_buf_ready - t_cb_entry`).
+
+### 3.5 System Resource Monitoring
+
+Resource telemetry runs on an asynchronous non-blocking thread (`SystemMonitor`) sampling process and system metrics every 200 ms:
+- **Publisher CPU Utilization**: Dedicated process-level CPU % (`utime + stime` ticks delta divided by system ticks, scaled across available CPU cores; reports mean and peak).
+- **Subscriber CPU Utilization**: Dedicated process-level CPU % for the subscriber process (mean and peak).
+- **Publisher Process RSS**: Peak resident memory (`VmHWM` from `/proc/self/status`) consumed by the publisher process.
+- **Subscriber Process RSS**: Peak resident memory (`VmHWM` from `/proc/self/status`) consumed by the subscriber process (reflecting buffer pool mapping vs heap duplication).
+- **System RAM Usage**: Overall host memory pressure (`MemTotal - MemAvailable` from `/proc/meminfo`).
+- **GPU Utilization**: Where reliable monitoring is available (`nvidia-smi`), records GPU core utilization (%); otherwise reports `N/A`.
+- **Strict Telemetry Integrity**: Unsupported or unavailable metrics are recorded as `N/A`—unreliable or synthetic telemetry is never injected just to populate CSV columns.
 
 ---
 
@@ -304,40 +308,68 @@ ros2 run cuda_bb_benchmark benchmark_latency.py \
 
 All benchmark CSVs and logs are saved under [`results/`](results/).
 
-### 6.1 Two-Subscriber Comparison CSV Schema (`*_fallback_two_subs.launch.py`)
+### 6.1 Two-Subscriber Comparison CSV Schema
+
+#### Shared Memory Comparison (`shmem_fallback_two_subs.launch.py`)
 
 | Column | Description |
 | :--- | :--- |
 | `resolution` | Image dimensions (e.g. `1920x1080`) |
 | `size_bytes` | Payload size in bytes per frame |
 | `target_hz` | Target configured publishing rate (Hz) |
-| `actual_pub_hz` | Actual measured publishing rate calculated via `steady_clock` timestamps |
-| `shmem_recv_hz` / `cuda_recv_hz` | Actual measured receiving rate for zero-copy subscriber (Hz) |
-| `fallback_recv_hz` | Actual measured receiving rate for fallback CPU subscriber (Hz) |
-| `shmem_frames` / `cuda_frames` | Total benchmark frames measured by zero-copy subscriber |
-| `fallback_frames` | Total benchmark frames measured by fallback subscriber |
-| `shmem_loss_pct` / `cuda_loss_pct` | Frame loss percentage for zero-copy subscriber |
+| `actual_pub_fps` | Actual publisher FPS measured via monotonic `steady_clock` timestamps |
+| `shmem_recv_fps` | Actual receiving FPS for zero-copy SHMEM subscriber |
+| `fallback_recv_fps` | Actual receiving FPS for fallback CPU subscriber |
+| `total_published_frames` | Total messages dispatched during the benchmark window |
+| `shmem_received_frames` | Benchmark frames received by SHMEM subscriber |
+| `fallback_received_frames` | Benchmark frames received by fallback subscriber |
+| `shmem_dropped_frames` | Dropped frames detected for SHMEM subscriber |
+| `fallback_dropped_frames` | Dropped frames detected for fallback subscriber |
+| `shmem_loss_pct` | Frame loss percentage for SHMEM subscriber |
 | `fallback_loss_pct` | Frame loss percentage for fallback subscriber |
-| `shmem_p50_ms` / `cuda_p50_ms` | **P50 (Median) latency** for zero-copy subscriber (ms) |
-| `fallback_p50_ms` | **P50 (Median) latency** for fallback subscriber (ms) |
-| `p50_speedup` | Factor of improvement for median latency (`fallback_p50 / zero_copy_p50`) |
-| `shmem_p95_ms` / `cuda_p95_ms` | **P95 latency** for zero-copy subscriber (ms) |
-| `fallback_p95_ms` | **P95 latency** for fallback subscriber (ms) |
-| `shmem_p99_ms` / `cuda_p99_ms` | **P99 (Tail) latency** for zero-copy subscriber (ms) |
-| `fallback_p99_ms` | **P99 (Tail) latency** for fallback subscriber (ms) |
-| `p99_speedup` | Factor of improvement for tail latency (`fallback_p99 / zero_copy_p99`) |
-| `shmem_mean_ms` / `cuda_mean_ms` | Mean latency for zero-copy subscriber (ms) |
-| `fallback_mean_ms` | Mean latency for fallback subscriber (ms) |
-| `mean_speedup` | Factor of improvement for mean latency (`fallback_mean / zero_copy_mean`) |
+| `shmem_p50_ms` / `fallback_p50_ms` | **P50 (Median) latency** (ms) |
+| `p50_speedup` | Factor of improvement for median latency (`fallback_p50 / shmem_p50`) |
+| `shmem_p95_ms` / `fallback_p95_ms` | **P95 latency** (ms) |
+| `shmem_p99_ms` / `fallback_p99_ms` | **P99 (Tail) latency** (ms) |
+| `p99_speedup` | Factor of improvement for tail latency (`fallback_p99 / shmem_p99`) |
+| `shmem_mean_ms` / `fallback_mean_ms` | Mean latency (ms) |
+| `mean_speedup` | Factor of improvement for mean latency (`fallback_mean / shmem_mean`) |
 | `shmem_min_ms` / `fallback_min_ms` | Minimum frame latency recorded (ms) |
 | `shmem_max_ms` / `fallback_max_ms` | Maximum frame latency recorded (ms) |
 | `shmem_std_ms` / `fallback_std_ms` | Latency standard deviation / jitter (ms) |
-| `shmem_outliers` / `fallback_outliers` | Number of frames exceeding the 3-sigma latency threshold |
-| `shmem_cpu_mean_pct` / `fallback_cpu_mean_pct` | Mean host CPU utilization (%) during benchmark |
-| `shmem_cpu_max_pct` / `fallback_cpu_max_pct` | Peak host CPU utilization (%) during benchmark |
-| `shmem_rss_peak_mb` / `fallback_rss_peak_mb` | Peak process resident memory (`VmHWM`) in MB |
-| `shmem_clock_mean_mhz` / `fallback_clock_mean_mhz` | Average CPU clock frequency (MHz) across cores |
-| `shmem_power_mean_w` / `fallback_power_mean_w` | Mean system power consumption (Watts) |
+| `shmem_outliers` / `fallback_outliers` | Number of 3-sigma outliers (`> mean + 3 * std_dev`) (never discarded) |
+| `pub_cpu_mean_pct` / `pub_cpu_max_pct` | Publisher process CPU utilization (%) (mean / peak) |
+| `shmem_sub_cpu_mean_pct` / `shmem_sub_cpu_max_pct` | SHMEM subscriber process CPU utilization (%) (mean / peak) |
+| `fallback_sub_cpu_mean_pct` / `fallback_sub_cpu_max_pct` | Fallback subscriber process CPU utilization (%) (mean / peak) |
+| `pub_rss_peak_mb` | Publisher process peak resident memory (`VmHWM`) in MB |
+| `shmem_sub_rss_peak_mb` | SHMEM subscriber process peak resident memory (`VmHWM`) in MB |
+| `fallback_sub_rss_peak_mb` | Fallback subscriber process peak resident memory (`VmHWM`) in MB |
+| `system_ram_mb` | Host system RAM used (MB) |
+| `gpu_util_pct` | GPU core utilization (%) or `N/A` if no NVIDIA GPU |
+
+#### CUDA Comparison (`cuda_fallback_two_subs.launch.py`)
+
+| Column | Description |
+| :--- | :--- |
+| `resolution` | Image dimensions (e.g. `1920x1080`) |
+| `size_bytes` | Payload size in bytes per frame |
+| `target_hz` | Target configured publishing rate (Hz) |
+| `actual_pub_fps` | Actual publisher FPS measured via monotonic timestamps |
+| `cuda_recv_fps` / `fallback_recv_fps` | Actual receiving FPS for CUDA and fallback subscribers |
+| `total_published_frames` | Total messages dispatched during the benchmark window |
+| `cuda_received_frames` / `fallback_received_frames` | Frames received and measured |
+| `cuda_dropped_frames` / `fallback_dropped_frames` | Dropped frames detected |
+| `cuda_loss_pct` / `fallback_loss_pct` | Frame loss percentage |
+| `cuda_cb_*` | **Callback Entry Latency**: P50, P95, P99, Mean, Min, Max, StdDev, Outliers (`t_cb_entry - t_pub`) |
+| `cuda_br_*` | **Buffer-Ready Latency**: P50, P95, P99, Mean, Min, Max, StdDev, Outliers after `cudaStreamSynchronize` |
+| `fallback_*` | Fallback CPU subscriber latencies |
+| `p50_speedup` / `p99_speedup` / `mean_speedup` | Speedup ratios comparing Fallback latency to CUDA Buffer-Ready latency |
+| `pub_cpu_mean_pct` / `pub_cpu_max_pct` | Publisher process CPU utilization (%) (mean / peak) |
+| `cuda_sub_cpu_mean_pct` / `cuda_sub_cpu_max_pct` | CUDA subscriber process CPU utilization (%) (mean / peak) |
+| `fallback_sub_cpu_mean_pct` / `fallback_sub_cpu_max_pct` | Fallback subscriber process CPU utilization (%) (mean / peak) |
+| `pub_rss_peak_mb` / `cuda_sub_rss_peak_mb` / `fallback_sub_rss_peak_mb` | Peak process resident memory (`VmHWM`) in MB |
+| `system_ram_mb` | Host system RAM used (MB) |
+| `gpu_util_pct` | GPU core utilization (%) or `N/A` |
 
 ### 6.2 Single-Mode and Intra-Process CSV Schema
 
@@ -347,32 +379,27 @@ All benchmark CSVs and logs are saved under [`results/`](results/).
 | `size_bytes` | Payload size in bytes per frame |
 | `resolution` | Image dimensions (e.g. `1920x1080`) |
 | `target_hz` | Target configured rate (Hz) |
-| `actual_pub_hz` | Actual publisher FPS measured via monotonic timestamps |
-| `actual_recv_hz` | Actual subscriber receiving FPS |
-| `total_sent` | Total sequence range sent in benchmark window |
-| `received_frames` | Frames successfully received and measured |
-| `lost_frames` | Dropped/skipped frames identified via sequence numbering |
-| `loss_pct` | Frame loss percentage (`lost_frames / total_sent * 100`) |
-| `mean_latency_ms` | Average frame latency (ms) |
-| `min_latency_ms` | Minimum frame latency (ms) |
-| `p50_latency_ms` | 50th percentile (Median) latency (ms) |
-| `p95_latency_ms` | 95th percentile latency (ms) |
-| `p99_latency_ms` | 99th percentile (Tail) latency (ms) |
-| `max_latency_ms` | Maximum frame latency (ms) |
-| `std_dev_ms` | Latency standard deviation (ms) |
-| `outliers_3sigma_count` | Frames exceeding `mean + 3 * std_dev` |
-| `cpu_util_mean_pct` | Mean host CPU utilization (%) |
-| `cpu_util_max_pct` | Peak host CPU utilization (%) |
-| `process_rss_mean_mb` | Average process RSS resident memory (MB) |
-| `process_rss_peak_mb` | Peak process RSS resident memory (`VmHWM`) in MB |
+| `actual_pub_fps` | Actual publisher FPS measured via monotonic timestamps |
+| `actual_recv_fps` | Actual subscriber receiving FPS |
+| `total_published_frames` | Total sequence range sent in benchmark window |
+| `total_received_frames` | Frames successfully received and measured |
+| `dropped_frames` | Dropped/skipped frames identified via sequence numbering |
+| `frame_loss_pct` | Frame loss percentage (`dropped_frames / total_published_frames * 100`) |
+| `mean_latency_ms` / `cb_mean_latency_ms` | Mean frame latency (ms) |
+| `min_latency_ms` / `cb_min_latency_ms` | Minimum frame latency (ms) |
+| `p50_latency_ms` / `cb_p50_latency_ms` | 50th percentile (Median) latency (ms) |
+| `p95_latency_ms` / `cb_p95_latency_ms` | 95th percentile latency (ms) |
+| `p99_latency_ms` / `cb_p99_latency_ms` | 99th percentile (Tail) latency (ms) |
+| `max_latency_ms` / `cb_max_latency_ms` | Maximum frame latency (ms) |
+| `std_dev_ms` / `cb_std_dev_ms` | Latency standard deviation / jitter (ms) |
+| `outliers_3sigma_count` / `cb_outliers_3sigma_count` | Frames exceeding `mean + 3 * std_dev` (never discarded) |
+| `br_*` *(CUDA only)* | Buffer-ready latency statistics after `cudaStreamSynchronize` (Mean, Min, P50, P95, P99, Max, StdDev, Outliers) |
+| `pub_cpu_mean_pct` / `pub_cpu_max_pct` | Publisher process CPU utilization (%) (or container in intra-process) |
+| `sub_cpu_mean_pct` / `sub_cpu_max_pct` | Subscriber process CPU utilization (%) (or container in intra-process) |
+| `pub_rss_peak_mb` | Publisher process peak resident memory (`VmHWM`) in MB |
+| `sub_rss_peak_mb` | Subscriber process peak resident memory (`VmHWM`) in MB |
 | `system_ram_mb` | Host system RAM used (MB) |
-| `cpu_clock_mean_mhz` | Mean CPU core clock frequency (MHz) |
-| `cpu_clock_max_mhz` | Peak CPU boost clock frequency (MHz) |
-| `power_mean_w` | Mean system power draw (Watts) |
-| `power_max_w` | Peak system power draw (Watts) |
-| `gpu_util_pct` | Mean NVIDIA GPU utilization (%) |
-| `gpu_clock_mhz` | Mean NVIDIA GPU core clock (MHz) |
-| `gpu_power_w` | Mean NVIDIA GPU power draw (Watts) |
+| `gpu_util_pct` | NVIDIA GPU core utilization (%) or `N/A` |
 
 ---
 
