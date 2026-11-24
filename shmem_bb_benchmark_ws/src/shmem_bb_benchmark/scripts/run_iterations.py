@@ -118,73 +118,100 @@ def compute_average_row(rows, header):
 
 
 def print_comparison_table(rows, avg_row, width, height, rate, sub_mode):
-    print("\n" + "=" * 125)
+    print("\n" + "=" * 165)
     print(f" ITERATION RESULTS & AVERAGE SUMMARY [ {width}x{height} @ {rate:.1f} Hz | sub_mode={sub_mode} ]")
-    print("=" * 125)
+    print("=" * 165)
 
     headers = [
         ("Run", 12),
-        ("Pub FPS", 10),
-        ("Shm FPS", 10),
-        ("CPU FPS", 10),
-        ("Shm P50 (ms)", 13),
-        ("CPU P50 (ms)", 13),
-        ("Shm Mean (ms)", 14),
-        ("CPU Mean (ms)", 14),
-        ("Speedup", 9),
-        ("Pub CPU%", 10),
-        ("Sub CPU%", 10),
+        ("Pub FPS", 9),
+        ("Shm FPS", 9),
+        ("CPU FPS", 9),
+        ("Loss% (Shm/CPU)", 17),
+        ("Shm P50", 9),
+        ("CPU P50", 9),
+        ("Shm P95", 9),
+        ("CPU P95", 9),
+        ("Shm P99", 9),
+        ("CPU P99", 9),
+        ("Shm Mean", 10),
+        ("CPU Mean", 10),
+        ("Shm Std", 9),
+        ("CPU Std", 9),
+        ("Speedup", 8),
     ]
 
     header_line = " | ".join(f"{h:<{w}}" for h, w in headers)
     print(header_line)
-    print("-" * 125)
+    print("-" * 165)
 
     for idx, r in enumerate(rows, 1):
         run_name = f"Iteration {idx}"
         pub_fps = format_val(r.get('actual_pub_fps'), 2)
         shm_fps = format_val(r.get('shmem_recv_fps'), 2)
         fb_fps = format_val(r.get('fallback_recv_fps'), 2)
+        shm_loss = format_val(r.get('shmem_loss_pct'), 2)
+        fb_loss = format_val(r.get('fallback_loss_pct'), 2)
+        loss_str = f"{shm_loss}% / {fb_loss}%"
+
         shm_p50 = format_val(r.get('shmem_p50_ms'), 3)
         fb_p50 = format_val(r.get('fallback_p50_ms'), 3)
+        shm_p95 = format_val(r.get('shmem_p95_ms'), 3)
+        fb_p95 = format_val(r.get('fallback_p95_ms'), 3)
+        shm_p99 = format_val(r.get('shmem_p99_ms'), 3)
+        fb_p99 = format_val(r.get('fallback_p99_ms'), 3)
         shm_mean = format_val(r.get('shmem_mean_ms'), 3)
         fb_mean = format_val(r.get('fallback_mean_ms'), 3)
+        shm_std = format_val(r.get('shmem_std_ms'), 3)
+        fb_std = format_val(r.get('fallback_std_ms'), 3)
         speedup = r.get('mean_speedup', 'N/A')
-        pub_cpu = format_val(r.get('pub_cpu_mean_pct'), 1)
-        sub_cpu = format_val(r.get('shmem_sub_cpu_mean_pct') if r.get('shmem_sub_cpu_mean_pct') != 'N/A' else r.get('fallback_sub_cpu_mean_pct'), 1)
 
         row_vals = [
             (run_name, 12),
-            (pub_fps, 10),
-            (shm_fps, 10),
-            (fb_fps, 10),
-            (shm_p50, 13),
-            (fb_p50, 13),
-            (shm_mean, 14),
-            (fb_mean, 14),
-            (speedup, 9),
-            (pub_cpu, 10),
-            (sub_cpu, 10),
+            (pub_fps, 9),
+            (shm_fps, 9),
+            (fb_fps, 9),
+            (loss_str, 17),
+            (shm_p50, 9),
+            (fb_p50, 9),
+            (shm_p95, 9),
+            (fb_p95, 9),
+            (shm_p99, 9),
+            (fb_p99, 9),
+            (shm_mean, 10),
+            (fb_mean, 10),
+            (shm_std, 9),
+            (fb_std, 9),
+            (speedup, 8),
         ]
         print(" | ".join(f"{v:<{w}}" for v, w in row_vals))
 
-    print("-" * 125)
+    print("-" * 165)
     # Average row
+    avg_shm_loss = format_val(avg_row.get('shmem_loss_pct'), 2)
+    avg_fb_loss = format_val(avg_row.get('fallback_loss_pct'), 2)
+    avg_loss_str = f"{avg_shm_loss}% / {avg_fb_loss}%"
+
     avg_vals = [
         ("AVERAGE", 12),
-        (format_val(avg_row.get('actual_pub_fps'), 2), 10),
-        (format_val(avg_row.get('shmem_recv_fps'), 2), 10),
-        (format_val(avg_row.get('fallback_recv_fps'), 2), 10),
-        (format_val(avg_row.get('shmem_p50_ms'), 3), 13),
-        (format_val(avg_row.get('fallback_p50_ms'), 3), 13),
-        (format_val(avg_row.get('shmem_mean_ms'), 3), 14),
-        (format_val(avg_row.get('fallback_mean_ms'), 3), 14),
-        (avg_row.get('mean_speedup', 'N/A'), 9),
-        (format_val(avg_row.get('pub_cpu_mean_pct'), 1), 10),
-        (format_val(avg_row.get('shmem_sub_cpu_mean_pct') if avg_row.get('shmem_sub_cpu_mean_pct') != 'N/A' else avg_row.get('fallback_sub_cpu_mean_pct'), 1), 10),
+        (format_val(avg_row.get('actual_pub_fps'), 2), 9),
+        (format_val(avg_row.get('shmem_recv_fps'), 2), 9),
+        (format_val(avg_row.get('fallback_recv_fps'), 2), 9),
+        (avg_loss_str, 17),
+        (format_val(avg_row.get('shmem_p50_ms'), 3), 9),
+        (format_val(avg_row.get('fallback_p50_ms'), 3), 9),
+        (format_val(avg_row.get('shmem_p95_ms'), 3), 9),
+        (format_val(avg_row.get('fallback_p95_ms'), 3), 9),
+        (format_val(avg_row.get('shmem_p99_ms'), 3), 9),
+        (format_val(avg_row.get('fallback_p99_ms'), 3), 9),
+        (format_val(avg_row.get('shmem_mean_ms'), 3), 10),
+        (format_val(avg_row.get('fallback_mean_ms'), 3), 10),
+        (format_val(avg_row.get('shmem_std_ms'), 3), 9),
+        (format_val(avg_row.get('fallback_std_ms'), 3), 9),
+        (avg_row.get('mean_speedup', 'N/A'), 8),
     ]
     print(" | ".join(f"{v:<{w}}" for v, w in avg_vals))
-    print("=" * 125)
+    print("=" * 165)
 
 
 def main():

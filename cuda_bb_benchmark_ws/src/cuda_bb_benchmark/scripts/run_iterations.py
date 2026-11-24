@@ -117,78 +117,100 @@ def compute_average_row(rows, header):
 
 
 def print_comparison_table(rows, avg_row, width, height, rate, sub_mode):
-    print("\n" + "=" * 135)
+    print("\n" + "=" * 175)
     print(f" CUDA ITERATION RESULTS & AVERAGE SUMMARY [ {width}x{height} @ {rate:.1f} Hz | sub_mode={sub_mode} ]")
-    print("=" * 135)
+    print("=" * 175)
 
     headers = [
         ("Run", 12),
-        ("Pub FPS", 10),
-        ("CUDA FPS", 10),
-        ("CPU FPS", 10),
-        ("CUDA CB P50", 12),
-        ("CUDA BR P50", 12),
-        ("CPU P50", 10),
-        ("CUDA BR Mean", 13),
+        ("Pub FPS", 9),
+        ("CUDA FPS", 9),
+        ("CPU FPS", 9),
+        ("Loss% (CU/CPU)", 16),
+        ("CU BR P50", 10),
+        ("CPU P50", 9),
+        ("CU BR P95", 10),
+        ("CPU P95", 9),
+        ("CU BR P99", 10),
+        ("CPU P99", 9),
+        ("CU BR Mean", 11),
         ("CPU Mean", 10),
-        ("Speedup", 9),
-        ("GPU Util", 10),
+        ("CU BR Std", 10),
+        ("CPU Std", 9),
+        ("Speedup", 8),
     ]
 
     header_line = " | ".join(f"{h:<{w}}" for h, w in headers)
     print(header_line)
-    print("-" * 135)
+    print("-" * 175)
 
     for idx, r in enumerate(rows, 1):
         run_name = f"Iteration {idx}"
         pub_fps = format_val(r.get('actual_pub_fps'), 2)
         cu_fps = format_val(r.get('cuda_recv_fps'), 2)
         fb_fps = format_val(r.get('fallback_recv_fps'), 2)
-        cu_cb_p50 = format_val(r.get('cuda_cb_p50_ms'), 3)
+        cu_loss = format_val(r.get('cuda_loss_pct'), 2)
+        fb_loss = format_val(r.get('fallback_loss_pct'), 2)
+        loss_str = f"{cu_loss}% / {fb_loss}%"
+
         cu_br_p50 = format_val(r.get('cuda_br_p50_ms'), 3)
         fb_p50 = format_val(r.get('fallback_p50_ms'), 3)
+        cu_br_p95 = format_val(r.get('cuda_br_p95_ms'), 3)
+        fb_p95 = format_val(r.get('fallback_p95_ms'), 3)
+        cu_br_p99 = format_val(r.get('cuda_br_p99_ms'), 3)
+        fb_p99 = format_val(r.get('fallback_p99_ms'), 3)
         cu_br_mean = format_val(r.get('cuda_br_mean_ms'), 3)
         fb_mean = format_val(r.get('fallback_mean_ms'), 3)
+        cu_br_std = format_val(r.get('cuda_br_std_ms'), 3)
+        fb_std = format_val(r.get('fallback_std_ms'), 3)
         speedup = r.get('mean_speedup', 'N/A')
-        gpu_util = format_val(r.get('gpu_util_pct'), 1)
-        if gpu_util != 'N/A':
-            gpu_util += '%'
 
         row_vals = [
             (run_name, 12),
-            (pub_fps, 10),
-            (cu_fps, 10),
-            (fb_fps, 10),
-            (cu_cb_p50, 12),
-            (cu_br_p50, 12),
-            (fb_p50, 10),
-            (cu_br_mean, 13),
+            (pub_fps, 9),
+            (cu_fps, 9),
+            (fb_fps, 9),
+            (loss_str, 16),
+            (cu_br_p50, 10),
+            (fb_p50, 9),
+            (cu_br_p95, 10),
+            (fb_p95, 9),
+            (cu_br_p99, 10),
+            (fb_p99, 9),
+            (cu_br_mean, 11),
             (fb_mean, 10),
-            (speedup, 9),
-            (gpu_util, 10),
+            (cu_br_std, 10),
+            (fb_std, 9),
+            (speedup, 8),
         ]
         print(" | ".join(f"{v:<{w}}" for v, w in row_vals))
 
-    print("-" * 135)
+    print("-" * 175)
     # Average row
-    avg_gpu = format_val(avg_row.get('gpu_util_pct'), 1)
-    if avg_gpu != 'N/A':
-        avg_gpu += '%'
+    avg_cu_loss = format_val(avg_row.get('cuda_loss_pct'), 2)
+    avg_fb_loss = format_val(avg_row.get('fallback_loss_pct'), 2)
+    avg_loss_str = f"{avg_cu_loss}% / {avg_fb_loss}%"
+
     avg_vals = [
         ("AVERAGE", 12),
-        (format_val(avg_row.get('actual_pub_fps'), 2), 10),
-        (format_val(avg_row.get('cuda_recv_fps'), 2), 10),
-        (format_val(avg_row.get('fallback_recv_fps'), 2), 10),
-        (format_val(avg_row.get('cuda_cb_p50_ms'), 3), 12),
-        (format_val(avg_row.get('cuda_br_p50_ms'), 3), 12),
-        (format_val(avg_row.get('fallback_p50_ms'), 3), 10),
-        (format_val(avg_row.get('cuda_br_mean_ms'), 3), 13),
+        (format_val(avg_row.get('actual_pub_fps'), 2), 9),
+        (format_val(avg_row.get('cuda_recv_fps'), 2), 9),
+        (format_val(avg_row.get('fallback_recv_fps'), 2), 9),
+        (avg_loss_str, 16),
+        (format_val(avg_row.get('cuda_br_p50_ms'), 3), 10),
+        (format_val(avg_row.get('fallback_p50_ms'), 3), 9),
+        (format_val(avg_row.get('cuda_br_p95_ms'), 3), 10),
+        (format_val(avg_row.get('fallback_p95_ms'), 3), 9),
+        (format_val(avg_row.get('cuda_br_p99_ms'), 3), 10),
+        (format_val(avg_row.get('fallback_p99_ms'), 3), 9),
+        (format_val(avg_row.get('cuda_br_mean_ms'), 3), 11),
         (format_val(avg_row.get('fallback_mean_ms'), 3), 10),
-        (avg_row.get('mean_speedup', 'N/A'), 9),
-        (avg_gpu, 10),
+        (format_val(avg_row.get('cuda_br_std_ms'), 3), 10),
+        (format_val(avg_row.get('fallback_std_ms'), 3), 9),
+        (avg_row.get('mean_speedup', 'N/A'), 8),
     ]
     print(" | ".join(f"{v:<{w}}" for v, w in avg_vals))
-    print("=" * 135)
+    print("=" * 175)
 
 
 def main():
