@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+# Copyright 2026 Meet Gandhi
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Run repeated benchmark iterations for a single resolution and calculate iteration averages.
+"""
+
+import argparse
+import csv
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+
+
+def parse_resolution(res_str: str):
+    """Parse 'WIDTHxHEIGHT' string into (width, height) integers."""
+    try:
+        parts = res_str.lower().split('x')
+        if len(parts) == 2:
+            return int(parts[0]), int(parts[1])
+    except Exception:
+        pass
+    raise argparse.ArgumentTypeError(
+        f"Invalid resolution '{res_str}'. Expected format: WIDTHxHEIGHT (e.g. 1920x1080)")
+
+
+def validate_iterations(val_str: str):
+    try:
+        val = int(val_str)
+        if 1 <= val <= 10:
+            return val
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError(
+        f"Invalid iteration '{val_str}'. Must be an integer between 1 and 10.")
+
+
+def format_val(val, decimals=2):
+    if val is None or val == 'N/A' or val == '':
+        return 'N/A'
+    try:
+        num = float(val)
+        return f"{num:.{decimals}f}"
+    except (ValueError, TypeError):
+        return str(val)
+
+
+def compute_average_row(rows, header):
+    avg_row = {}
+    for col in header:
+        values = []
+        is_numeric = True
+        for r in rows:
+            v = r.get(col, '')
+            if v == 'N/A' or v == '' or 'x' in str(v).lower():
+                is_numeric = False
+                break
+            try:
+                values.append(float(v))
+            except ValueError:
+                is_numeric = False
+                break
+
+        if is_numeric and values:
+            mean_v = sum(values) / len(values)
+            if 'fps' in col or 'pct' in col or 'util' in col or 'ram' in col or 'rss' in col or 'temp' in col:
+                avg_row[col] = f"{mean_v:.2f}"
+            elif 'ms' in col:
+                avg_row[col] = f"{mean_v:.3f}"
+            elif 'frames' in col or 'count' in col or 'outliers' in col:
+                avg_row[col] = f"{mean_v:.1f}"
+            else:
+                avg_row[col] = f"{mean_v:.2f}"
+        else:
+            # Check if all rows share the same non-numeric string (e.g. resolution, size_bytes, target_hz)
+            sample_val = rows[0].get(col, 'N/A') if rows else 'N/A'
+            if all(r.get(col) == sample_val for r in rows):
+                avg_row[col] = sample_val
+            else:
+                avg_row[col] = 'N/A'
+
+    # Recalculate speedup ratios if available
+    try:
+        if 'shmem_mean_ms' in avg_row and 'fallback_mean_ms' in avg_row:
+            shm = float(avg_row['shmem_mean_ms'])
+            fb = float(avg_row['fallback_mean_ms'])
+            if shm > 0:
+                avg_row['mean_speedup'] = f"{fb / shm:.2f}x"
+        if 'shmem_p50_ms' in avg_row and 'fallback_p50_ms' in avg_row:
+            shm = float(avg_row['shmem_p50_ms'])
+            fb = float(avg_row['fallback_p50_ms'])
+            if shm > 0:
+                avg_row['p50_speedup'] = f"{fb / shm:.2f}x"
+        if 'shmem_p99_ms' in avg_row and 'fallback_p99_ms' in avg_row:
+            shm = float(avg_row['shmem_p99_ms'])
+            fb = float(avg_row['fallback_p99_ms'])
+            if shm > 0:
+                avg_row['p99_speedup'] = f"{fb / shm:.2f}x"
+    except (ValueError, TypeError, KeyError):
+        pass
+
+    return avg_row
+
+
+def print_comparison_table(rows, avg_row, width, height, rate, sub_mode):
+    print("\n" + "=" * 125)
+    print(f" ITERATION RESULTS & AVERAGE SUMMARY [ {width}x{height} @ {rate:.1f} Hz | sub_mode={sub_mode} ]")
+    print("=" * 125)
+
+    headers = [
+        ("Run", 12),
+        ("Pub FPS", 10),
+        ("Shm FPS", 10),
+        ("CPU FPS", 10),
+        ("Shm P50 (ms)", 13),
+        ("CPU P50 (ms)", 13),
+        ("Shm Mean (ms)", 14),
+        ("CPU Mean (ms)", 14),
+        ("Speedup", 9),
+        ("Pub CPU%", 10),
+        ("Sub CPU%", 10),
+    ]
+
+    header_line = " | ".join(f"{h:<{w}}" for h, w in headers)
+    print(header_line)
+    print("-" * 125)
+
+    for idx, r in enumerate(rows, 1):
+        run_name = f"Iteration {idx}"
+        pub_fps = format_val(r.get('actual_pub_fps'), 2)
+        shm_fps = format_val(r.get('shmem_recv_fps'), 2)
+        fb_fps = format_val(r.get('fallback_recv_fps'), 2)
+        shm_p50 = format_val(r.get('shmem_p50_ms'), 3)
+        fb_p50 = format_val(r.get('fallback_p50_ms'), 3)
+        shm_mean = format_val(r.get('shmem_mean_ms'), 3)
+        fb_mean = format_val(r.get('fallback_mean_ms'), 3)
+        speedup = r.get('mean_speedup', 'N/A')
+        pub_cpu = format_val(r.get('pub_cpu_mean_pct'), 1)
+        sub_cpu = format_val(r.get('shmem_sub_cpu_mean_pct') if r.get('shmem_sub_cpu_mean_pct') != 'N/A' else r.get('fallback_sub_cpu_mean_pct'), 1)
+
+        row_vals = [
+            (run_name, 12),
+            (pub_fps, 10),
+            (shm_fps, 10),
+            (fb_fps, 10),
+            (shm_p50, 13),
+            (fb_p50, 13),
+            (shm_mean, 14),
+            (fb_mean, 14),
+            (speedup, 9),
+            (pub_cpu, 10),
+            (sub_cpu, 10),
+        ]
+        print(" | ".join(f"{v:<{w}}" for v, w in row_vals))
+
+    print("-" * 125)
+    # Average row
+    avg_vals = [
+        ("AVERAGE", 12),
+        (format_val(avg_row.get('actual_pub_fps'), 2), 10),
+        (format_val(avg_row.get('shmem_recv_fps'), 2), 10),
+        (format_val(avg_row.get('fallback_recv_fps'), 2), 10),
+        (format_val(avg_row.get('shmem_p50_ms'), 3), 13),
+        (format_val(avg_row.get('fallback_p50_ms'), 3), 13),
+        (format_val(avg_row.get('shmem_mean_ms'), 3), 14),
+        (format_val(avg_row.get('fallback_mean_ms'), 3), 14),
+        (avg_row.get('mean_speedup', 'N/A'), 9),
+        (format_val(avg_row.get('pub_cpu_mean_pct'), 1), 10),
+        (format_val(avg_row.get('shmem_sub_cpu_mean_pct') if avg_row.get('shmem_sub_cpu_mean_pct') != 'N/A' else avg_row.get('fallback_sub_cpu_mean_pct'), 1), 10),
+    ]
+    print(" | ".join(f"{v:<{w}}" for v, w in avg_vals))
+    print("=" * 125)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Run repeated benchmark iterations for single resolution and compute averages."
+    )
+    parser.add_argument(
+        '-i', '--iterations', type=validate_iterations, default=1,
+        help="Number of times to iterate the benchmark (min: 1, max: 10; default: 1)"
+    )
+    parser.add_argument(
+        '--resolution', type=parse_resolution, default='1920x1080',
+        help="Single resolution to benchmark, e.g. 1920x1080 (default: 1920x1080)"
+    )
+    parser.add_argument(
+        '--rate', type=float, default=30.0,
+        help="Publishing rate in Hz (default: 30.0)"
+    )
+    parser.add_argument(
+        '--max-msgs', type=int, default=1000,
+        help="Number of messages to publish per iteration (default: 1000)"
+    )
+    parser.add_argument(
+        '--sub-mode', choices=['both', 'shmem', 'cpu'], default='both',
+        help="Subscribers to run: 'both', 'shmem', or 'cpu' (default: both)"
+    )
+    parser.add_argument(
+        '-o', '--output', type=str, default='',
+        help="Path to save all iteration results and average CSV"
+    )
+
+    args = parser.parse_args()
+    width, height = args.resolution
+
+    print("=" * 80)
+    print(f" BENCHMARK ITERATION RUNNER: {args.iterations} iteration(s)")
+    print(f" Resolution: {width}x{height} | Target Rate: {args.rate:.1f} Hz | Messages: {args.max_msgs}")
+    print(f" Subscriber Mode: {args.sub_mode}")
+    print("=" * 80)
+
+    all_rows = []
+    header = None
+
+    for it in range(1, args.iterations + 1):
+        print(f"\n>>> Running Iteration {it}/{args.iterations}...")
+        with tempfile.NamedTemporaryFile(suffix=f'_it_{it}.csv', delete=False) as tmp_file:
+            tmp_path = tmp_file.name
+
+        cmd = [
+            'ros2', 'launch', 'shmem_bb_benchmark', 'shmem_fallback_two_subs.launch.py',
+            f'width:={width}',
+            f'height:={height}',
+            f'rate:={args.rate:.1f}',
+            f'max_msgs:={args.max_msgs}',
+            f'sub_mode:={args.sub_mode}',
+            f'csv_path:={tmp_path}',
+        ]
+
+        try:
+            res = subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as err:
+            print(f"Error during iteration {it}: {err}")
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            continue
+
+        if os.path.exists(tmp_path):
+            with open(tmp_path, 'r', newline='') as f:
+                reader = csv.DictReader(f)
+                header = reader.fieldnames
+                for r in reader:
+                    r_with_iter = dict(r)
+                    r_with_iter['iteration'] = str(it)
+                    all_rows.append(r_with_iter)
+            os.unlink(tmp_path)
+
+        if it < args.iterations:
+            time.sleep(1.0)
+
+    if not all_rows:
+        print("Error: No iteration benchmark results collected.")
+        sys.exit(1)
+
+    avg_row = compute_average_row(all_rows, header)
+    avg_row['iteration'] = 'AVERAGE'
+
+    print_comparison_table(all_rows, avg_row, width, height, args.rate, args.sub_mode)
+
+    if args.output:
+        out_path = Path(args.output).resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        full_header = ['iteration'] + [h for h in header if h != 'iteration']
+        with open(out_path, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=full_header)
+            writer.writeheader()
+            for r in all_rows:
+                writer.writerow({k: r.get(k, '') for k in full_header})
+            writer.writerow({k: avg_row.get(k, '') for k in full_header})
+        print(f"\nAll iteration outputs and average written to: {out_path}\n")
+
+
+if __name__ == '__main__':
+    main()

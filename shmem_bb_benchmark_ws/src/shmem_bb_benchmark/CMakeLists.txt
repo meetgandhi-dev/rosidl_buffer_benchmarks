@@ -83,7 +83,7 @@ install(
 
 install(
   PROGRAMS
-    scripts/benchmark_latency.py
+    scripts/run_iterations.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

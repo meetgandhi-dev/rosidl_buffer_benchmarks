@@ -222,15 +222,18 @@ ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \
 | SHM backend, same process | Intra-process | `shmem` | `intra_process_pub_sub.launch.py mode:=shmem` |
 | CPU backend, same process | Intra-process | `cpu` | `intra_process_pub_sub.launch.py mode:=cpu` |
 
-#### Option D: Automated Multi-Resolution Sweep
+#### Option D: Iteration Benchmark Runner (`run_iterations.py`)
+
+Runs repeated benchmark iterations for a single resolution (min: 1, max: 10) and calculates both individual run statistics and overall averages:
 
 ```bash
-ros2 run shmem_bb_benchmark benchmark_latency.py \
-  --sizes 640x480 1280x720 1920x1080 3840x2160 \
-  --rates 10 30 60 \
-  --max-frames 1000 \
-  --backends both \
-  --output results/shmem_latency_sweep_summary.csv
+ros2 run shmem_bb_benchmark run_iterations.py \
+  --iterations 5 \
+  --resolution 1920x1080 \
+  --rate 30.0 \
+  --max-msgs 1000 \
+  --sub-mode both \
+  --output results/shmem_1080p_5iterations.csv
 ```
 
 ---
@@ -309,15 +312,18 @@ ros2 launch cuda_bb_benchmark cuda_intra_process_pub_sub.launch.py \
 | CUDA backend, same process | Intra-process | `cuda` | `cuda_intra_process_pub_sub.launch.py mode:=cuda` |
 | CPU backend, same process | Intra-process | `cpu` | `cuda_intra_process_pub_sub.launch.py mode:=cpu` |
 
-#### Option D: Automated Multi-Resolution Sweep
+#### Option D: Iteration Benchmark Runner (`run_iterations.py`)
+
+Runs repeated benchmark iterations for a single resolution (min: 1, max: 10) and calculates both individual run statistics and overall averages:
 
 ```bash
-ros2 run cuda_bb_benchmark benchmark_latency.py \
-  --sizes 640x480 1280x720 1920x1080 3840x2160 \
-  --rates 10 30 60 \
-  --max-frames 1000 \
-  --backends both \
-  --output results/cuda_latency_sweep_summary.csv
+ros2 run cuda_bb_benchmark run_iterations.py \
+  --iterations 5 \
+  --resolution 1920x1080 \
+  --rate 30.0 \
+  --max-msgs 1000 \
+  --sub-mode both \
+  --output results/cuda_1080p_5iterations.csv
 ```
 
 ---

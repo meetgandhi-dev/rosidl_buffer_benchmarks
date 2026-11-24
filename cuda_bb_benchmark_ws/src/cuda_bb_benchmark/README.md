@@ -15,8 +15,8 @@ This package benchmarks zero-copy GPU memory sharing via CUDA IPC (Virtual Memor
 - **Intra-Process Benchmarks**:
   - `cuda_intra_process_pub_sub.launch.py`: Pub and Sub loaded into the same `component_container` with intra-process communication enabled.
 - **Warm-Up Exclusion**: Automatically ignores initial warm-up messages (`warmup_messages:=10` by default) to eliminate setup, allocator initialization, and DDS discovery transients from the statistics.
-- **Automated Sweep Script**:
-  - `benchmark_latency.py`: Sweeps across resolutions (640x480, 1280x720, 1920x1080, 3840x2160) and rates (10, 30, 60 Hz).
+- **Iteration Benchmark Script**:
+  - `run_iterations.py`: Runs repeated benchmark iterations for a single resolution (min: 1, max: 10) and calculates individual and averaged results.
 
 ---
 
@@ -74,12 +74,14 @@ ros2 launch cuda_bb_benchmark cuda_intra_process_pub_sub.launch.py \
   width:=1920 height:=1080 rate:=30.0 mode:=cpu max_msgs:=1000
 ```
 
-### 4.4 Resolution & Rate Sweeps
+### 4.4 Repeated Iterations & Averages
 
 ```bash
-ros2 run cuda_bb_benchmark benchmark_latency.py \
-  --sizes 1280x720 1920x1080 3840x2160 \
-  --rates 30 60 \
-  --max-frames 100 \
-  --output cuda_benchmark_summary.csv
+ros2 run cuda_bb_benchmark run_iterations.py \
+  --iterations 5 \
+  --resolution 1920x1080 \
+  --rate 30.0 \
+  --max-msgs 1000 \
+  --sub-mode both \
+  --output cuda_1080p_5iterations.csv
 ```

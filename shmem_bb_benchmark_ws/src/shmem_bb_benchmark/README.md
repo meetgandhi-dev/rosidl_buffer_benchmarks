@@ -107,18 +107,19 @@ ros2 run shmem_bb_benchmark shmem_image_publisher_node --ros-args -p rate:=20.0
 
 ---
 
-## Latency Benchmarking: SHMEM vs Non-SHM (CPU)
+## Iteration Benchmarking: Single Resolution Repeated Runs
 
-To compare `shmem_buffer_backend` against conventional non-shared-memory ROS 2 transport (serialized CPU buffer over DDS):
+To run repeated benchmark iterations for a single resolution and compute averages across runs:
 
 ```bash
 source install/setup.bash
-ros2 run shmem_bb_benchmark benchmark_latency.py \
-  --sizes 640x480 1280x720 1920x1080 \
-  --rates 10 30 \
-  --max-frames 30 \
-  --backends both \
-  --output shmem_vs_non_shm_latency.csv
+ros2 run shmem_bb_benchmark run_iterations.py \
+  --iterations 5 \
+  --resolution 1920x1080 \
+  --rate 30.0 \
+  --max-msgs 1000 \
+  --sub-mode both \
+  --output shmem_1080p_5iterations.csv
 ```
 
 You can also run nodes individually with non-shm mode:
