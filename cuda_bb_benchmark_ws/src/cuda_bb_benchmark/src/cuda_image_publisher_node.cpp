@@ -86,7 +86,6 @@ void CudaImagePublisherNode::publish_timer_callback()
   if (total_messages > 0 && static_cast<int>(sequence_) >= total_messages) {
     timer_->cancel();
     message_history_.clear();
-    benchmark_end_time_ = std::chrono::steady_clock::now();
 
     const double elapsed_sec = std::chrono::duration<double>(
       benchmark_end_time_ - benchmark_start_time_).count();
@@ -132,6 +131,9 @@ void CudaImagePublisherNode::publish_timer_callback()
   if (seq == static_cast<std::size_t>(warmup_messages_ + 1)) {
     benchmark_start_time_ = steady_now;
     proc_monitor_.start();
+  }
+  if (seq > static_cast<std::size_t>(warmup_messages_)) {
+    benchmark_end_time_ = steady_now;
   }
 
   sensor_msgs::msg::Image msg;
