@@ -156,17 +156,26 @@ source shmem_bb_benchmark_ws/install/setup.bash
 
 #### Option A: 2-Subscriber Comparison (Shared vs. Fallback Side-by-Side)
 
-Runs **1 publisher** and **2 subscribers** on the same topic simultaneously:
-- 1 Publisher: Allocates message in shared memory (`shmem`).
-- Subscriber 1 (`subscriber_shared`): Consumes message via zero-copy shared memory (`shmem`).
-- Subscriber 2 (`subscriber_fallback`): Receives fallback wire copy via DDS (`cpu`).
+Runs **1 publisher** (always in SHMEM mode) and allows controlling which subscribers run via `sub_mode`:
+- `sub_mode:=both` (default): Runs both zero-copy SHMEM subscriber and CPU fallback subscriber simultaneously on the same topic.
+- `sub_mode:=shmem`: Runs only the zero-copy SHMEM subscriber (`subscriber_shared`).
+- `sub_mode:=cpu`: Runs only the CPU fallback subscriber (`subscriber_fallback`).
 
 Automatically runs for `max_msgs` frames (with initial 10 warm-up messages excluded) and outputs side-by-side latency stats and a merged CSV:
 
 ```bash
+# Run both subscribers (default side-by-side comparison):
 ros2 launch shmem_bb_benchmark shmem_fallback_two_subs.launch.py \
-  width:=1920 height:=1080 rate:=30.0 max_msgs:=1000 \
+  width:=1920 height:=1080 rate:=30.0 max_msgs:=1000 sub_mode:=both \
   csv_path:=$(pwd)/results/1080p_30fps_two_subs_comparison.csv
+
+# Run 1 SHMEM pub with only 1 SHMEM sub:
+ros2 launch shmem_bb_benchmark shmem_fallback_two_subs.launch.py \
+  sub_mode:=shmem max_msgs:=1000
+
+# Run 1 SHMEM pub with only 1 CPU sub:
+ros2 launch shmem_bb_benchmark shmem_fallback_two_subs.launch.py \
+  sub_mode:=cpu max_msgs:=1000
 ```
 
 #### Option B: 1-Subscriber Selectable Mode (Inter-Process: Shared vs. Wire)
@@ -236,17 +245,26 @@ source cuda_bb_benchmark_ws/install/setup.bash
 
 #### Option A: 2-Subscriber Comparison (CUDA Zero-Copy vs. Fallback Side-by-Side)
 
-Runs **1 CUDA publisher** and **2 subscribers** on the same topic:
-- 1 Publisher: Allocates buffer in GPU memory via `cuda_buffer_backend`.
-- Subscriber 1 (`cuda_subscriber`): Receives GPU memory handle via zero-copy CUDA VMM IPC (`acceptable_buffer_backends="cuda"`).
-- Subscriber 2 (`fallback_subscriber`): Fallback subscriber receiving standard serialized CPU copy via DDS.
+Runs **1 CUDA publisher** (always allocating GPU memory) and allows controlling which subscribers run via `sub_mode`:
+- `sub_mode:=both` (default): Runs both CUDA zero-copy subscriber and CPU fallback subscriber simultaneously on the same topic.
+- `sub_mode:=cuda`: Runs only the CUDA zero-copy subscriber (`cuda_subscriber`).
+- `sub_mode:=cpu`: Runs only the CPU fallback subscriber (`fallback_subscriber`).
 
 Outputs side-by-side comparison table with latency speedup:
 
 ```bash
+# Run both subscribers (default side-by-side comparison):
 ros2 launch cuda_bb_benchmark cuda_fallback_two_subs.launch.py \
-  width:=1920 height:=1080 rate:=30.0 max_msgs:=1000 \
+  width:=1920 height:=1080 rate:=30.0 max_msgs:=1000 sub_mode:=both \
   csv_path:=$(pwd)/results/cuda_1080p_two_subs_comparison.csv
+
+# Run 1 CUDA pub with only 1 CUDA sub:
+ros2 launch cuda_bb_benchmark cuda_fallback_two_subs.launch.py \
+  sub_mode:=cuda max_msgs:=1000
+
+# Run 1 CUDA pub with only 1 CPU sub:
+ros2 launch cuda_bb_benchmark cuda_fallback_two_subs.launch.py \
+  sub_mode:=cpu max_msgs:=1000
 ```
 
 #### Option B: 1-Subscriber Selectable Mode (Inter-Process: CUDA vs. Wire)
