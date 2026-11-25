@@ -35,15 +35,8 @@ def init_csv_file(context):
     if csv_file:
         try:
             os.makedirs(os.path.dirname(os.path.abspath(csv_file)), exist_ok=True)
-            with open(csv_file, 'w') as f:
-                f.write(
-                    'backend,size_bytes,resolution,target_hz,actual_pub_hz,actual_recv_hz,'
-                    'total_sent,received_frames,lost_frames,loss_pct,mean_latency_ms,'
-                    'min_latency_ms,p50_latency_ms,p95_latency_ms,p99_latency_ms,max_latency_ms,'
-                    'std_dev_ms,outliers_3sigma_count,'
-                    'cpu_util_mean_pct,cpu_util_max_pct,process_rss_mean_mb,process_rss_peak_mb,'
-                    'system_ram_mb,cpu_clock_mean_mhz,cpu_clock_max_mhz,power_mean_w,power_max_w,'
-                    'gpu_util_pct,gpu_clock_mhz,gpu_power_w\n')
+            if os.path.exists(csv_file):
+                os.remove(csv_file)
         except OSError:
             pass
 
@@ -89,7 +82,7 @@ def print_csv_results(*args, **kwargs):
                     print(f" {'  Std Dev (Jitter)':<26} | {r.get('cb_std_dev_ms','')} ms")
                     print(f" {'  Outliers (> 3-sigma)':<26} | {r.get('cb_outliers_3sigma_count','')} frames")
                     print('-' * 105)
-                    print(" [2] Buffer-Ready Latency (Pub-to-CUDA Synchronized Buffer Ready):")
+                    print(" [2] GPU-Ready Latency (Pub-to-Data Fully Available on Subscriber GPU):")
                     print(f" {'  P50 Latency (Median)':<26} | {r.get('br_p50_latency_ms','')} ms")
                     print(f" {'  P95 Latency':<26} | {r.get('br_p95_latency_ms','')} ms")
                     print(f" {'  P99 Latency':<26} | {r.get('br_p99_latency_ms','')} ms")
@@ -98,11 +91,15 @@ def print_csv_results(*args, **kwargs):
                     print(f" {'  Max Latency':<26} | {r.get('br_max_latency_ms','')} ms")
                     print(f" {'  Std Dev (Jitter)':<26} | {r.get('br_std_dev_ms','')} ms")
                     print(f" {'  Outliers (> 3-sigma)':<26} | {r.get('br_outliers_3sigma_count','')} frames")
-                    try:
-                        sync_diff = float(r.get('br_mean_latency_ms', 0)) - float(r.get('cb_mean_latency_ms', 0))
-                        print(f" {'  CUDA Sync Overhead':<26} | {max(0.0, sync_diff):.3f} ms")
-                    except (ValueError, TypeError):
-                        pass
+                    device_op = r.get('device_op_mean_ms', '')
+                    if device_op:
+                        print(f" {'  Device Op (H2D / Imp-Sync)':<26} | {device_op} ms")
+                    else:
+                        try:
+                            sync_diff = float(r.get('br_mean_latency_ms', 0)) - float(r.get('cb_mean_latency_ms', 0))
+                            print(f" {'  CUDA Sync Overhead':<26} | {max(0.0, sync_diff):.3f} ms")
+                        except (ValueError, TypeError):
+                            pass
                 else:
                     print(f" {'P50 Latency (Median)':<26} | {r.get('p50_latency_ms','')} ms")
                     print(f" {'P95 Latency':<26} | {r.get('p95_latency_ms','')} ms")
@@ -183,8 +180,8 @@ def generate_launch_description():
         'auto_exit', default_value='',
         description='Whether nodes should automatically exit (default: true when max_msgs > 0)')
     verify_content_arg = DeclareLaunchArgument(
-        'verify_content', default_value='true',
-        description='Whether to verify payload data integrity')
+        'verify_content', default_value='false',
+        description='Whether to verify payload data integrity (false for performance runs, true for correctness)')
     cuda_device_id_arg = DeclareLaunchArgument(
         'cuda_device_id', default_value='0',
         description='CUDA GPU device ordinal')
@@ -217,7 +214,7 @@ def generate_launch_description():
         parameters=[{
             'topic': LaunchConfiguration('topic'),
             'result_prefix': 'cuda_bench',
-            'use_cuda': use_cuda,
+            'use_cuda': True,
             'require_cuda': use_cuda,
             'verify_content': verify_content_expr,
             'publish_diagnostics': False,

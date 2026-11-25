@@ -56,8 +56,20 @@ CudaImageSubscriberNode::CudaImageSubscriberNode(const rclcpp::NodeOptions & opt
   int history_depth = declare_parameter<int>("history_depth", 20);
 
   if (use_cuda_) {
-    cudaSetDevice(cuda_device_id_);
-    cudaStreamCreate(&stream_);
+    cudaError_t err = cudaSetDevice(cuda_device_id_);
+    if (err != cudaSuccess) {
+      RCLCPP_FATAL(
+        get_logger(), "cudaSetDevice(%d) failed during subscriber initialization: %s",
+        cuda_device_id_, cudaGetErrorString(err));
+      throw std::runtime_error(std::string("cudaSetDevice failed: ") + cudaGetErrorString(err));
+    }
+    err = cudaStreamCreate(&stream_);
+    if (err != cudaSuccess || stream_ == nullptr) {
+      RCLCPP_FATAL(
+        get_logger(), "cudaStreamCreate() failed during subscriber initialization: %s",
+        cudaGetErrorString(err));
+      throw std::runtime_error(std::string("cudaStreamCreate failed: ") + cudaGetErrorString(err));
+    }
   }
 
   rclcpp::SubscriptionOptions sub_options;
@@ -121,11 +133,19 @@ CudaImageSubscriberNode::CudaImageSubscriberNode(const rclcpp::NodeOptions & opt
 CudaImageSubscriberNode::~CudaImageSubscriberNode()
 {
   sys_monitor_.stop();
-  if (!summary_written_ && !latencies_ms_.empty() && !summary_csv_path_.empty()) {
+  if (!summary_written_ && !callback_latencies_ms_.empty() && !summary_csv_path_.empty()) {
     write_summary_report(last_backend_, last_width_, last_height_);
   }
+  // Synchronize the CUDA stream BEFORE freeing gpu_dest_buffer_ and destroying the stream
   if (stream_ != nullptr) {
     cudaStreamSynchronize(stream_);
+  }
+  if (gpu_dest_buffer_ != nullptr) {
+    cudaFree(gpu_dest_buffer_);
+    gpu_dest_buffer_ = nullptr;
+    gpu_dest_buffer_size_ = 0;
+  }
+  if (stream_ != nullptr) {
     cudaStreamDestroy(stream_);
     stream_ = nullptr;
   }
@@ -200,89 +220,204 @@ void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShare
   }
   last_seq_ = seq;
 
+  const bool is_cuda_backend = (backend == "cuda");
+  const bool is_cpu_backend = (backend == "cpu");
   const bool backend_valid =
-    use_cuda_ ? (!require_cuda_ || backend == "cuda") : (backend == "cpu");
+    use_cuda_ ? (is_cuda_backend || (!require_cuda_ && is_cpu_backend)) : is_cpu_backend;
   if (!backend_valid) {
     all_valid_ = false;
     RCLCPP_WARN(
       get_logger(),
-      "Message #%zu backend mismatch: expected '%s', got '%s'",
-      received_count_, use_cuda_ ? "cuda" : "cpu", backend.c_str());
+      "Message #%zu rejected: unsupported or disallowed backend '%s' (use_cuda=%s, require_cuda=%s)",
+      received_count_, backend.c_str(),
+      use_cuda_ ? "true" : "false", require_cuda_ ? "true" : "false");
   }
 
-  // Buffer readiness & synchronization
+  // Buffer readiness & synchronization: both paths are measured until data is fully available on subscriber GPU
   int64_t buf_ready_steady_ns = cb_entry_steady_ns;
+  double device_op_time_ms = 0.0;
+  bool gpu_op_ok = true;
   std::optional<cuda_buffer_backend::ReadHandle> read_handle;
+  const std::size_t payload_size = msg->data.size();
+  last_payload_size_ = payload_size;
+
   if (backend == "cuda") {
+    // CUDA path: native GPU buffer import without host staging
+    const auto op_start = std::chrono::steady_clock::now();
     try {
       read_handle = cuda_buffer_backend::from_input_buffer(msg->data, stream_);
-      // Required CUDA synchronization to ensure buffer is ready on device
-      cudaStreamSynchronize(stream_);
-      const auto buf_ready_time = std::chrono::steady_clock::now();
-      buf_ready_steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        buf_ready_time.time_since_epoch()).count();
+      if (!read_handle.has_value() || (payload_size > 0 && read_handle->get_ptr() == nullptr)) {
+        gpu_op_ok = false;
+        RCLCPP_ERROR(
+          get_logger(),
+          "CUDA buffer import returned null pointer for non-empty payload (%zu B) on msg #%zu",
+          payload_size, received_count_);
+      } else {
+        cudaError_t sync_err = cudaStreamSynchronize(stream_);
+        if (sync_err != cudaSuccess) {
+          gpu_op_ok = false;
+          RCLCPP_ERROR(
+            get_logger(),
+            "cudaStreamSynchronize failed after CUDA import on msg #%zu: %s",
+            received_count_, cudaGetErrorString(sync_err));
+        }
+      }
     } catch (const std::exception & e) {
+      gpu_op_ok = false;
       RCLCPP_ERROR(
         get_logger(),
         "Exception importing CUDA buffer on msg #%zu: %s",
         received_count_, e.what());
     }
-  } else {
-    // For CPU fallback, data buffer is already in host RAM
-    const auto buf_ready_time = std::chrono::steady_clock::now();
+    const auto gpu_ready_time = std::chrono::steady_clock::now();
     buf_ready_steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-      buf_ready_time.time_since_epoch()).count();
+      gpu_ready_time.time_since_epoch()).count();
+    device_op_time_ms = std::chrono::duration<double, std::milli>(
+      gpu_ready_time - op_start).count();
+  } else if (backend == "cpu") {
+    // CPU path: copy payload from CPU host memory to destination GPU memory (H2D)
+    // Allocate destination GPU buffer once (during warm-up) and reuse it across frames
+    if (payload_size > gpu_dest_buffer_size_) {
+      if (gpu_dest_buffer_ != nullptr) {
+        if (stream_ != nullptr) {
+          cudaStreamSynchronize(stream_);
+        }
+        cudaError_t free_err = cudaFree(gpu_dest_buffer_);
+        if (free_err != cudaSuccess) {
+          RCLCPP_ERROR(
+            get_logger(),
+            "cudaFree failed when resizing destination GPU buffer: %s",
+            cudaGetErrorString(free_err));
+        }
+        gpu_dest_buffer_ = nullptr;
+        gpu_dest_buffer_size_ = 0;
+      }
+      cudaError_t alloc_err = cudaMalloc(&gpu_dest_buffer_, payload_size);
+      if (alloc_err != cudaSuccess || gpu_dest_buffer_ == nullptr) {
+        gpu_op_ok = false;
+        RCLCPP_ERROR(
+          get_logger(),
+          "cudaMalloc failed for CPU destination GPU buffer (%zu bytes): %s",
+          payload_size, cudaGetErrorString(alloc_err));
+      } else {
+        gpu_dest_buffer_size_ = payload_size;
+        RCLCPP_INFO(
+          get_logger(),
+          "Allocated reusable destination GPU buffer (%zu bytes) for CPU->GPU H2D path.",
+          gpu_dest_buffer_size_);
+      }
+    }
+
+    const auto op_start = std::chrono::steady_clock::now();
+    if (gpu_op_ok && payload_size > 0) {
+      if (gpu_dest_buffer_ == nullptr || msg->data.data() == nullptr) {
+        gpu_op_ok = false;
+        RCLCPP_ERROR(
+          get_logger(),
+          "Null host or device buffer pointer on CPU->GPU H2D copy (msg #%zu)",
+          received_count_);
+      } else {
+        cudaError_t copy_err = cudaMemcpyAsync(
+          gpu_dest_buffer_, msg->data.data(), payload_size,
+          cudaMemcpyHostToDevice, stream_);
+        if (copy_err != cudaSuccess) {
+          gpu_op_ok = false;
+          RCLCPP_ERROR(
+            get_logger(),
+            "cudaMemcpyAsync(H2D) failed on msg #%zu: %s",
+            received_count_, cudaGetErrorString(copy_err));
+        } else {
+          cudaError_t sync_err = cudaStreamSynchronize(stream_);
+          if (sync_err != cudaSuccess) {
+            gpu_op_ok = false;
+            RCLCPP_ERROR(
+              get_logger(),
+              "cudaStreamSynchronize failed after H2D copy on msg #%zu: %s",
+              received_count_, cudaGetErrorString(sync_err));
+          }
+        }
+      }
+    }
+    const auto gpu_ready_time = std::chrono::steady_clock::now();
+    buf_ready_steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      gpu_ready_time.time_since_epoch()).count();
+    device_op_time_ms = std::chrono::duration<double, std::milli>(
+      gpu_ready_time - op_start).count();
+  } else {
+    gpu_op_ok = false;
+    RCLCPP_ERROR(
+      get_logger(),
+      "Unsupported backend '%s' on msg #%zu; rejecting GPU operation.",
+      backend.c_str(), received_count_);
   }
 
   bool content_valid = true;
   if (verify_content_) {
-    try {
-      const std::size_t payload_size = msg->data.size();
-      const uint8_t expected_val = generate_sequence_byte(seq);
-
-      if (backend == "cuda" && read_handle.has_value()) {
-        std::vector<uint8_t> host_buffer(payload_size);
-        cudaMemcpyAsync(
-          host_buffer.data(), read_handle->get_ptr(), payload_size,
-          cudaMemcpyDeviceToHost, stream_);
-        cudaStreamSynchronize(stream_);
-
-        for (std::size_t i = 0; i < payload_size; ++i) {
-          if (host_buffer[i] != expected_val) {
-            content_valid = false;
-            RCLCPP_ERROR(
-              get_logger(),
-              "Content corruption at byte %zu: expected 0x%02x, got 0x%02x",
-              i, expected_val, host_buffer[i]);
-            break;
-          }
-        }
-      } else {
-        const uint8_t * payload_ptr = msg->data.data();
-        for (std::size_t i = 0; i < payload_size; ++i) {
-          if (payload_ptr[i] != expected_val) {
-            content_valid = false;
-            RCLCPP_ERROR(
-              get_logger(),
-              "Content corruption at byte %zu: expected 0x%02x, got 0x%02x",
-              i, expected_val, payload_ptr[i]);
-            break;
-          }
-        }
-      }
-    } catch (const std::exception & e) {
+    if (!gpu_op_ok) {
+      // Do not fall back to msg->data.data() if CUDA import or GPU operation failed
       content_valid = false;
-      RCLCPP_ERROR(
-        get_logger(),
-        "Exception verifying buffer on msg #%zu: %s",
-        received_count_, e.what());
+    } else if (payload_size > 0) {
+      try {
+        const uint8_t expected_val = generate_sequence_byte(seq);
+        const void * gpu_src_ptr = (backend == "cuda") ?
+          (read_handle.has_value() ? read_handle->get_ptr() : nullptr) :
+          gpu_dest_buffer_;
+
+        if (gpu_src_ptr == nullptr) {
+          content_valid = false;
+          RCLCPP_ERROR(
+            get_logger(),
+            "No valid GPU pointer available for content verification on msg #%zu",
+            received_count_);
+        } else {
+          std::vector<uint8_t> host_buffer(payload_size);
+          cudaError_t d2h_err = cudaMemcpyAsync(
+            host_buffer.data(), gpu_src_ptr, payload_size,
+            cudaMemcpyDeviceToHost, stream_);
+          if (d2h_err != cudaSuccess) {
+            content_valid = false;
+            RCLCPP_ERROR(
+              get_logger(),
+              "cudaMemcpyAsync(D2H) failed during verification on msg #%zu: %s",
+              received_count_, cudaGetErrorString(d2h_err));
+          } else {
+            cudaError_t sync_err = cudaStreamSynchronize(stream_);
+            if (sync_err != cudaSuccess) {
+              content_valid = false;
+              RCLCPP_ERROR(
+                get_logger(),
+                "cudaStreamSynchronize failed during verification on msg #%zu: %s",
+                received_count_, cudaGetErrorString(sync_err));
+            } else {
+              for (std::size_t i = 0; i < payload_size; ++i) {
+                if (host_buffer[i] != expected_val) {
+                  content_valid = false;
+                  RCLCPP_ERROR(
+                    get_logger(),
+                    "Content corruption at byte %zu: expected 0x%02x, got 0x%02x",
+                    i, expected_val, host_buffer[i]);
+                  break;
+                }
+              }
+            }
+          }
+        }
+      } catch (const std::exception & e) {
+        content_valid = false;
+        RCLCPP_ERROR(
+          get_logger(),
+          "Exception verifying GPU buffer on msg #%zu: %s",
+          received_count_, e.what());
+      }
     }
   }
 
-  if (!content_valid) {
+  if (!backend_valid || !gpu_op_ok || !content_valid) {
     all_valid_ = false;
-    RCLCPP_ERROR(
-      get_logger(), "Message #%zu content verification failed!", received_count_);
+    if (!content_valid) {
+      RCLCPP_ERROR(
+        get_logger(), "Message #%zu content verification failed!", received_count_);
+    }
   }
 
   // Consistent monotonic latency calculation via steady_clock
@@ -296,10 +431,10 @@ void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShare
   if (is_warmup) {
     RCLCPP_INFO(
       get_logger(),
-      "Received warm-up msg #%zu/%d (%zux%zu, %zu B, backend: '%s', cb_lat: %.3f ms, ready_lat: %.3f ms, valid: %s) [ignored for benchmark]",
+      "Received warm-up msg #%zu/%d (%zux%zu, %zu B, backend: '%s', cb_lat: %.3f ms, gpu_ready_lat: %.3f ms, op_time: %.3f ms, valid: %s) [ignored for benchmark]",
       seq, warmup_messages_, static_cast<std::size_t>(msg->width),
-      static_cast<std::size_t>(msg->height), msg->data.size(), backend.c_str(),
-      cb_latency_ms, buf_ready_latency_ms, (backend_valid && content_valid) ? "YES" : "NO");
+      static_cast<std::size_t>(msg->height), payload_size, backend.c_str(),
+      cb_latency_ms, buf_ready_latency_ms, device_op_time_ms, (backend_valid && gpu_op_ok && content_valid) ? "YES" : "NO");
   } else {
     if (callback_latencies_ms_.empty()) {
       first_bench_seq_ = seq;
@@ -311,17 +446,33 @@ void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShare
     sub_last_recv_time_ = cb_entry_time;
     pub_last_stamp_ns_ = pub_steady_ns;
 
+    // Callback-entry latency is independent of GPU operation and backend-validation failures
     callback_latencies_ms_.push_back(cb_latency_ms);
-    buffer_ready_latencies_ms_.push_back(buf_ready_latency_ms);
-    latencies_ms_.push_back(buf_ready_latency_ms);
+    if (backend_valid && gpu_op_ok) {
+      buffer_ready_latencies_ms_.push_back(buf_ready_latency_ms);
+      latencies_ms_.push_back(buf_ready_latency_ms);
+      device_op_latencies_ms_.push_back(device_op_time_ms);
+      raw_gpu_ready_ms_.push_back(buf_ready_latency_ms);
+      raw_device_op_ms_.push_back(device_op_time_ms);
+    } else {
+      if (!gpu_op_ok) {
+        ++failed_gpu_ops_count_;
+      }
+      raw_gpu_ready_ms_.push_back(-1.0);
+      raw_device_op_ms_.push_back(-1.0);
+    }
+    if (verify_content_ && !content_valid) {
+      ++failed_content_verify_count_;
+    }
+
     const std::size_t bench_idx = callback_latencies_ms_.size();
 
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 1000,
-      "Received msg #%zu [BENCHMARK %zu/%d] (%zux%zu, %zu B, backend: '%s', cb_lat: %.3f ms, ready_lat: %.3f ms, valid: %s)",
+      "Received msg #%zu [BENCHMARK %zu/%d] (%zux%zu, %zu B, backend: '%s', cb_lat: %.3f ms, gpu_ready_lat: %.3f ms, op_time: %.3f ms, valid: %s)",
       seq, bench_idx, max_messages_, static_cast<std::size_t>(msg->width),
-      static_cast<std::size_t>(msg->height), msg->data.size(), backend.c_str(),
-      cb_latency_ms, buf_ready_latency_ms, (backend_valid && content_valid) ? "YES" : "NO");
+      static_cast<std::size_t>(msg->height), payload_size, backend.c_str(),
+      cb_latency_ms, buf_ready_latency_ms, device_op_time_ms, (backend_valid && gpu_op_ok && content_valid) ? "YES" : "NO");
   }
 
   if (publish_diagnostics_) {
@@ -338,14 +489,14 @@ void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShare
     content_valid_pub_->publish(content_msg);
 
     std_msgs::msg::Bool all_msg;
-    all_msg.data = all_valid_ && backend_valid && content_valid;
+    all_msg.data = all_valid_ && backend_valid && gpu_op_ok && content_valid;
     all_valid_pub_->publish(all_msg);
   }
 
   const int total_expected = (max_messages_ > 0) ? (max_messages_ + warmup_messages_) : 0;
   const bool is_complete =
     (max_messages_ > 0 &&
-    (static_cast<int>(latencies_ms_.size()) >= max_messages_ ||
+    (static_cast<int>(callback_latencies_ms_.size()) >= max_messages_ ||
      static_cast<int>(received_count_) >= total_expected ||
      seq >= static_cast<std::size_t>(total_expected)));
 
@@ -438,11 +589,13 @@ void CudaImageSubscriberNode::write_summary_report(
 
   const auto cb_stats = calc_stats(callback_latencies_ms_);
   const auto br_stats = calc_stats(buffer_ready_latencies_ms_);
+  const auto op_stats = calc_stats(device_op_latencies_ms_);
   const double sync_overhead_mean_ms = (br_stats.mean_ms >= cb_stats.mean_ms) ?
     (br_stats.mean_ms - cb_stats.mean_ms) : 0.0;
 
   const std::size_t measured_frames = callback_latencies_ms_.size();
-  const std::size_t size_bytes = static_cast<std::size_t>(width) * height;
+  const std::size_t size_bytes = (last_payload_size_ > 0) ?
+    last_payload_size_ : (static_cast<std::size_t>(width) * height);
 
   // Frame loss calculation
   const std::size_t total_sent_in_window = (last_bench_seq_ >= first_bench_seq_) ?
@@ -474,18 +627,24 @@ void CudaImageSubscriberNode::write_summary_report(
     target_hz_, actual_pub_hz, actual_recv_hz);
   RCLCPP_INFO(get_logger(), " Frames:      Published: %zu | Received: %zu | Dropped: %zu (%.2f%% loss) | Warm-up: %d",
     total_published, measured_frames, lost_frames, frame_loss_pct, warmup_messages_);
+  RCLCPP_INFO(get_logger(), " Failures:    GPU Operation Failed: %zu | Content Verification Failed: %zu",
+    failed_gpu_ops_count_, failed_content_verify_count_);
   RCLCPP_INFO(get_logger(), " Latency (ms):");
-  RCLCPP_INFO(get_logger(), "   [Callback Entry Latency]:");
+  RCLCPP_INFO(get_logger(), "   [1] Callback Entry Latency (Pub-to-Callback Entry):");
   RCLCPP_INFO(get_logger(), "     P50:  %.3f | P95: %.3f | P99: %.3f", cb_stats.p50_ms, cb_stats.p95_ms, cb_stats.p99_ms);
   RCLCPP_INFO(get_logger(), "     Mean: %.3f | Min: %.3f | Max: %.3f | StdDev: %.3f",
     cb_stats.mean_ms, cb_stats.min_ms, cb_stats.max_ms, cb_stats.std_dev_ms);
   RCLCPP_INFO(get_logger(), "     Outliers (> 3-sigma): %zu frame(s)", cb_stats.outliers_count);
-  RCLCPP_INFO(get_logger(), "   [Buffer-Ready Latency (after CUDA sync)]:");
+  RCLCPP_INFO(get_logger(), "   [2] GPU-Ready Latency (Pub-to-Data Fully Available on Subscriber GPU):");
   RCLCPP_INFO(get_logger(), "     P50:  %.3f | P95: %.3f | P99: %.3f", br_stats.p50_ms, br_stats.p95_ms, br_stats.p99_ms);
   RCLCPP_INFO(get_logger(), "     Mean: %.3f | Min: %.3f | Max: %.3f | StdDev: %.3f",
     br_stats.mean_ms, br_stats.min_ms, br_stats.max_ms, br_stats.std_dev_ms);
   RCLCPP_INFO(get_logger(), "     Outliers (> 3-sigma): %zu frame(s)", br_stats.outliers_count);
-  RCLCPP_INFO(get_logger(), "   [CUDA Sync Overhead]: Mean: %.3f ms", sync_overhead_mean_ms);
+  const char * op_name = (backend == "cuda") ?
+    "CUDA Import & Stream Sync Overhead" : "CPU->GPU H2D cudaMemcpyAsync & Stream Sync Overhead";
+  RCLCPP_INFO(get_logger(), "   [3] Device Operation [%s]:", op_name);
+  RCLCPP_INFO(get_logger(), "     P50:  %.3f | P95: %.3f | P99: %.3f | Mean: %.3f | StdDev: %.3f",
+    op_stats.p50_ms, op_stats.p95_ms, op_stats.p99_ms, op_stats.mean_ms, op_stats.std_dev_ms);
   RCLCPP_INFO(get_logger(), " System Resources:");
   if (pub_report_received_) {
     RCLCPP_INFO(get_logger(), "   Publisher CPU:     Mean: %.1f%% | Max: %.1f%%",
@@ -535,17 +694,26 @@ void CudaImageSubscriberNode::write_summary_report(
   RCLCPP_INFO(get_logger(), "==========================================================================");
 
   if (!summary_csv_path_.empty()) {
-    std::ifstream check_file(summary_csv_path_);
-    const bool exists = check_file.good();
-    check_file.close();
+    bool write_header = true;
+    {
+      std::ifstream check_file(summary_csv_path_);
+      if (check_file.good()) {
+        check_file.seekg(0, std::ios::end);
+        if (check_file.tellg() > 0) {
+          write_header = false;
+        }
+      }
+    }
 
     std::ofstream csv(summary_csv_path_, std::ios::app);
     if (csv.is_open()) {
-      if (!exists) {
+      if (write_header) {
         csv << "backend,size_bytes,resolution,target_hz,actual_pub_fps,actual_recv_fps,"
             << "total_published_frames,total_received_frames,dropped_frames,frame_loss_pct,"
+            << "failed_gpu_ops_count,failed_content_verify_count,"
             << "cb_mean_latency_ms,cb_min_latency_ms,cb_p50_latency_ms,cb_p95_latency_ms,cb_p99_latency_ms,cb_max_latency_ms,cb_std_dev_ms,cb_outliers_3sigma_count,"
             << "br_mean_latency_ms,br_min_latency_ms,br_p50_latency_ms,br_p95_latency_ms,br_p99_latency_ms,br_max_latency_ms,br_std_dev_ms,br_outliers_3sigma_count,"
+            << "device_op_mean_ms,device_op_p50_ms,device_op_p95_ms,device_op_p99_ms,device_op_std_dev_ms,"
             << "pub_cpu_mean_pct,pub_cpu_max_pct,sub_cpu_mean_pct,sub_cpu_max_pct,"
             << "pub_rss_peak_mb,sub_rss_peak_mb,system_ram_mb,"
             << "gpu_util_pct,gpu_freq_mhz,emc_util_pct,emc_freq_mhz,cpu_temp_c,gpu_temp_c\n";
@@ -560,6 +728,8 @@ void CudaImageSubscriberNode::write_summary_report(
           << measured_frames << ","
           << lost_frames << ","
           << std::fixed << std::setprecision(2) << frame_loss_pct << ","
+          << failed_gpu_ops_count_ << ","
+          << failed_content_verify_count_ << ","
           << std::fixed << std::setprecision(3) << cb_stats.mean_ms << ","
           << std::fixed << std::setprecision(3) << cb_stats.min_ms << ","
           << std::fixed << std::setprecision(3) << cb_stats.p50_ms << ","
@@ -575,7 +745,12 @@ void CudaImageSubscriberNode::write_summary_report(
           << std::fixed << std::setprecision(3) << br_stats.p99_ms << ","
           << std::fixed << std::setprecision(3) << br_stats.max_ms << ","
           << std::fixed << std::setprecision(3) << br_stats.std_dev_ms << ","
-          << br_stats.outliers_count << ",";
+          << br_stats.outliers_count << ","
+          << std::fixed << std::setprecision(3) << op_stats.mean_ms << ","
+          << std::fixed << std::setprecision(3) << op_stats.p50_ms << ","
+          << std::fixed << std::setprecision(3) << op_stats.p95_ms << ","
+          << std::fixed << std::setprecision(3) << op_stats.p99_ms << ","
+          << std::fixed << std::setprecision(3) << op_stats.std_dev_ms << ",";
 
       if (pub_report_received_) {
         csv << std::fixed << std::setprecision(1) << pub_cpu_mean_pct_ << ","
@@ -632,11 +807,19 @@ void CudaImageSubscriberNode::write_summary_report(
   if (!latency_csv_path_.empty()) {
     std::ofstream csv(latency_csv_path_);
     if (csv.is_open()) {
-      csv << "frame,size_bytes,callback_latency_ms,buffer_ready_latency_ms\n";
+      csv << "frame,size_bytes,backend,callback_latency_ms,device_op_ms,gpu_ready_latency_ms,gpu_op_ok\n";
       for (std::size_t i = 0; i < callback_latencies_ms_.size(); ++i) {
-        csv << (i + 1) << "," << size_bytes << ","
-            << std::fixed << std::setprecision(3) << callback_latencies_ms_[i] << ","
-            << std::fixed << std::setprecision(3) << buffer_ready_latencies_ms_[i] << "\n";
+        const double op_ms = (i < raw_device_op_ms_.size()) ? raw_device_op_ms_[i] : -1.0;
+        const double br_ms = (i < raw_gpu_ready_ms_.size()) ? raw_gpu_ready_ms_[i] : -1.0;
+        const bool ok = (op_ms >= 0.0 && br_ms >= 0.0);
+        csv << (i + 1) << "," << size_bytes << "," << backend << ","
+            << std::fixed << std::setprecision(3) << callback_latencies_ms_[i] << ",";
+        if (ok) {
+          csv << std::fixed << std::setprecision(3) << op_ms << ","
+              << std::fixed << std::setprecision(3) << br_ms << ",1\n";
+        } else {
+          csv << "N/A,N/A,0\n";
+        }
       }
     }
   }

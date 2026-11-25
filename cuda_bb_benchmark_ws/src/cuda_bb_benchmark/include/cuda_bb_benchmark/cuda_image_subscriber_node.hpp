@@ -75,9 +75,16 @@ private:
   double target_hz_{0.0};
   std::string latency_csv_path_{""};
   std::string summary_csv_path_{""};
-  std::vector<double> latencies_ms_;  // Retained for backward compat (stores buffer-ready latencies)
+  std::vector<double> latencies_ms_;  // Retained for backward compat (stores valid GPU-ready latencies)
   std::vector<double> callback_latencies_ms_;
-  std::vector<double> buffer_ready_latencies_ms_;
+  std::vector<double> buffer_ready_latencies_ms_;  // Stores valid GPU-ready latencies
+  std::vector<double> device_op_latencies_ms_;     // Valid H2D copy time (CPU) or import+sync time (CUDA)
+  std::vector<double> raw_gpu_ready_ms_;           // Per-frame GPU-ready latency (-1.0 if GPU op failed)
+  std::vector<double> raw_device_op_ms_;           // Per-frame device op time (-1.0 if GPU op failed)
+
+  // Reusable destination GPU buffer for CPU-backed transport (allocated once, never per frame)
+  void * gpu_dest_buffer_{nullptr};
+  std::size_t gpu_dest_buffer_size_{0};
 
   std::size_t received_count_{0};
   bool all_valid_{true};
@@ -85,6 +92,9 @@ private:
   std::string last_backend_{"cuda"};
   uint32_t last_width_{0};
   uint32_t last_height_{0};
+  std::size_t last_payload_size_{0};
+  std::size_t failed_gpu_ops_count_{0};
+  std::size_t failed_content_verify_count_{0};
 
   // Frame and sequence tracking for drop detection
   std::size_t last_seq_{0};

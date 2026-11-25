@@ -35,15 +35,8 @@ def init_csv_file(context):
     if csv_file:
         try:
             os.makedirs(os.path.dirname(os.path.abspath(csv_file)), exist_ok=True)
-            with open(csv_file, 'w') as f:
-                f.write(
-                    'backend,size_bytes,resolution,target_hz,actual_pub_hz,actual_recv_hz,'
-                    'total_sent,received_frames,lost_frames,loss_pct,mean_latency_ms,'
-                    'min_latency_ms,p50_latency_ms,p95_latency_ms,p99_latency_ms,max_latency_ms,'
-                    'std_dev_ms,outliers_3sigma_count,'
-                    'cpu_util_mean_pct,cpu_util_max_pct,process_rss_mean_mb,process_rss_peak_mb,'
-                    'system_ram_mb,cpu_clock_mean_mhz,cpu_clock_max_mhz,power_mean_w,power_max_w,'
-                    'gpu_util_pct,gpu_clock_mhz,gpu_power_w\n')
+            if os.path.exists(csv_file):
+                os.remove(csv_file)
         except OSError:
             pass
 
@@ -80,14 +73,23 @@ def print_csv_results(*args, **kwargs):
                 print(f" {'Measured Frames':<26} | {total_recv} (Total Published: {total_pub})")
                 print(f" {'Lost Frames (Loss %)':<26} | {dropped} ({loss_pct}%)")
                 print('-' * 105)
-                print(f" {'P50 Latency (Median)':<26} | {r.get('p50_latency_ms','')} ms")
-                print(f" {'P95 Latency':<26} | {r.get('p95_latency_ms','')} ms")
-                print(f" {'P99 Latency':<26} | {r.get('p99_latency_ms','')} ms")
-                print(f" {'Mean Latency':<26} | {r.get('mean_latency_ms','')} ms")
-                print(f" {'Min Latency':<26} | {r.get('min_latency_ms','')} ms")
-                print(f" {'Max Latency':<26} | {r.get('max_latency_ms','')} ms")
-                print(f" {'Std Dev (Jitter)':<26} | {r.get('std_dev_ms','')} ms")
-                print(f" {'Outliers (> 3-sigma)':<26} | {r.get('outliers_3sigma_count','')} frames")
+                print(" [1] Callback-Entry Latency (Pub-to-Callback Entry):")
+                print(f" {'  P50 Latency (Median)':<26} | {r.get('p50_latency_ms','')} ms")
+                print(f" {'  P95 Latency':<26} | {r.get('p95_latency_ms','')} ms")
+                print(f" {'  P99 Latency':<26} | {r.get('p99_latency_ms','')} ms")
+                print(f" {'  Mean Latency':<26} | {r.get('mean_latency_ms','')} ms")
+                print(f" {'  Min Latency':<26} | {r.get('min_latency_ms','')} ms")
+                print(f" {'  Max Latency':<26} | {r.get('max_latency_ms','')} ms")
+                print(f" {'  Std Dev (Jitter)':<26} | {r.get('std_dev_ms','')} ms")
+                print(f" {'  Outliers (> 3-sigma)':<26} | {r.get('outliers_3sigma_count','')} frames")
+                if 'data_ready_p50_ms' in r:
+                    print('-' * 105)
+                    print(" [2] Backend Data-Ready Latency (Pub-to-Payload Pointer Accessible):")
+                    print(f" {'  P50 Data-Ready':<26} | {r.get('data_ready_p50_ms','')} ms")
+                    print(f" {'  P95 Data-Ready':<26} | {r.get('data_ready_p95_ms','')} ms")
+                    print(f" {'  P99 Data-Ready':<26} | {r.get('data_ready_p99_ms','')} ms")
+                    print(f" {'  Mean Data-Ready':<26} | {r.get('data_ready_mean_ms','')} ms")
+                    print(f" {'  Std Dev Data-Ready':<26} | {r.get('data_ready_std_dev_ms','')} ms")
                 print('-' * 105)
                 pub_cpu_mean = r.get('pub_cpu_mean_pct', 'N/A')
                 pub_cpu_max = r.get('pub_cpu_max_pct', 'N/A')
@@ -160,6 +162,9 @@ def generate_launch_description():
     auto_exit_arg = DeclareLaunchArgument(
         'auto_exit', default_value='',
         description='Whether nodes should automatically exit (default: true when max_msgs > 0)')
+    verify_content_arg = DeclareLaunchArgument(
+        'verify_content', default_value='false',
+        description='Whether subscriber verifies pixel payload byte patterns (false for performance runs, true for correctness)')
 
     # Resolve effective max messages
     effective_max_msgs = PythonExpression([
@@ -180,6 +185,10 @@ def generate_launch_description():
         "'true' if int('", effective_max_msgs, "') > 0 else 'false')"
     ])
 
+    verify_content_expr = PythonExpression([
+        "'", LaunchConfiguration('verify_content'), "'.strip().lower() in ['true', '1', 'yes']"
+    ])
+
     subscriber_node = Node(
         package='shmem_bb_benchmark',
         executable='shmem_image_subscriber_node',
@@ -190,7 +199,7 @@ def generate_launch_description():
             'result_prefix': 'shmem_bench',
             'use_shm': use_shm,
             'require_shmem': use_shm,
-            'verify_content': True,
+            'verify_content': verify_content_expr,
             'publish_diagnostics': False,
             'history_depth': LaunchConfiguration('history_depth'),
             'max_messages': effective_max_msgs,
@@ -255,6 +264,7 @@ def generate_launch_description():
         topic_arg,
         history_depth_arg,
         auto_exit_arg,
+        verify_content_arg,
         OpaqueFunction(function=init_csv_file),
         subscriber_node,
         delayed_publisher,

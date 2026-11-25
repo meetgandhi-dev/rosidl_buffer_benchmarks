@@ -153,6 +153,17 @@ def merge_and_print_csv_results(*args, **kwargs):
     shmem_outliers = shmem_data.get('outliers_3sigma_count', '0') if shmem_data else 'N/A'
     fallback_outliers = fallback_data.get('outliers_3sigma_count', '0') if fallback_data else 'N/A'
 
+    shmem_dr_p50 = shmem_data.get('data_ready_p50_ms', 'N/A') if shmem_data else 'N/A'
+    fallback_dr_p50 = fallback_data.get('data_ready_p50_ms', 'N/A') if fallback_data else 'N/A'
+    shmem_dr_p95 = shmem_data.get('data_ready_p95_ms', 'N/A') if shmem_data else 'N/A'
+    fallback_dr_p95 = fallback_data.get('data_ready_p95_ms', 'N/A') if fallback_data else 'N/A'
+    shmem_dr_p99 = shmem_data.get('data_ready_p99_ms', 'N/A') if shmem_data else 'N/A'
+    fallback_dr_p99 = fallback_data.get('data_ready_p99_ms', 'N/A') if fallback_data else 'N/A'
+    shmem_dr_mean = shmem_data.get('data_ready_mean_ms', 'N/A') if shmem_data else 'N/A'
+    fallback_dr_mean = fallback_data.get('data_ready_mean_ms', 'N/A') if fallback_data else 'N/A'
+    shmem_dr_std = shmem_data.get('data_ready_std_dev_ms', 'N/A') if shmem_data else 'N/A'
+    fallback_dr_std = fallback_data.get('data_ready_std_dev_ms', 'N/A') if fallback_data else 'N/A'
+
     pub_cpu_mean = pub_data.get('pub_cpu_mean_pct', src.get('pub_cpu_mean_pct', 'N/A')) if pub_data else src.get('pub_cpu_mean_pct', 'N/A')
     pub_cpu_max = pub_data.get('pub_cpu_max_pct', src.get('pub_cpu_max_pct', 'N/A')) if pub_data else src.get('pub_cpu_max_pct', 'N/A')
 
@@ -202,6 +213,11 @@ def merge_and_print_csv_results(*args, **kwargs):
         'shmem_max_ms', 'fallback_max_ms',
         'shmem_std_ms', 'fallback_std_ms',
         'shmem_outliers', 'fallback_outliers',
+        'shmem_dr_p50_ms', 'fallback_dr_p50_ms',
+        'shmem_dr_p95_ms', 'fallback_dr_p95_ms',
+        'shmem_dr_p99_ms', 'fallback_dr_p99_ms',
+        'shmem_dr_mean_ms', 'fallback_dr_mean_ms',
+        'shmem_dr_std_ms', 'fallback_dr_std_ms',
         'pub_cpu_mean_pct', 'pub_cpu_max_pct',
         'shmem_sub_cpu_mean_pct', 'shmem_sub_cpu_max_pct',
         'fallback_sub_cpu_mean_pct', 'fallback_sub_cpu_max_pct',
@@ -225,6 +241,11 @@ def merge_and_print_csv_results(*args, **kwargs):
         str(shmem_max), str(fallback_max),
         str(shmem_std), str(fallback_std),
         str(shmem_outliers), str(fallback_outliers),
+        str(shmem_dr_p50), str(fallback_dr_p50),
+        str(shmem_dr_p95), str(fallback_dr_p95),
+        str(shmem_dr_p99), str(fallback_dr_p99),
+        str(shmem_dr_mean), str(fallback_dr_mean),
+        str(shmem_dr_std), str(fallback_dr_std),
         str(pub_cpu_mean), str(pub_cpu_max),
         str(shmem_sub_cpu_mean), str(shmem_sub_cpu_max),
         str(fallback_sub_cpu_mean), str(fallback_sub_cpu_max),
@@ -272,28 +293,46 @@ def merge_and_print_csv_results(*args, **kwargs):
     fb_drop_str = f'{fallback_lost} ({fallback_loss_pct}%)' if fallback_lost != 'N/A' else 'N/A'
     print(f" {'Dropped Frames (Loss %)':<28} | {shm_drop_str:<22} | {fb_drop_str:<22} |")
     print('-' * 105)
+    print(" [1] Callback-Entry Latency (Pub-to-Callback Entry):")
     shm_p50_str = f'{shmem_p50} ms' if shmem_p50 != 'N/A' else 'N/A'
     fb_p50_str = f'{fallback_p50} ms' if fallback_p50 != 'N/A' else 'N/A'
-    print(f" {'P50 Latency (Median)':<28} | {shm_p50_str:<22} | {fb_p50_str:<22} | {p50_speedup}")
+    print(f" {'  P50 Latency (Median)':<28} | {shm_p50_str:<22} | {fb_p50_str:<22} | {p50_speedup}")
     shm_p95_str = f'{shmem_p95} ms' if shmem_p95 != 'N/A' else 'N/A'
     fb_p95_str = f'{fallback_p95} ms' if fallback_p95 != 'N/A' else 'N/A'
-    print(f" {'P95 Latency':<28} | {shm_p95_str:<22} | {fb_p95_str:<22} |")
+    print(f" {'  P95 Latency':<28} | {shm_p95_str:<22} | {fb_p95_str:<22} |")
     shm_p99_str = f'{shmem_p99} ms' if shmem_p99 != 'N/A' else 'N/A'
     fb_p99_str = f'{fallback_p99} ms' if fallback_p99 != 'N/A' else 'N/A'
-    print(f" {'P99 Latency (Tail)':<28} | {shm_p99_str:<22} | {fb_p99_str:<22} | {p99_speedup}")
+    print(f" {'  P99 Latency (Tail)':<28} | {shm_p99_str:<22} | {fb_p99_str:<22} | {p99_speedup}")
     shm_mean_str = f'{shmem_mean} ms' if shmem_mean != 'N/A' else 'N/A'
     fb_mean_str = f'{fallback_mean} ms' if fallback_mean != 'N/A' else 'N/A'
-    print(f" {'Mean Latency':<28} | {shm_mean_str:<22} | {fb_mean_str:<22} | {mean_speedup}")
+    print(f" {'  Mean Latency':<28} | {shm_mean_str:<22} | {fb_mean_str:<22} | {mean_speedup}")
     shm_min_str = f'{shmem_min} ms' if shmem_min != 'N/A' else 'N/A'
     fb_min_str = f'{fallback_min} ms' if fallback_min != 'N/A' else 'N/A'
-    print(f" {'Min Latency':<28} | {shm_min_str:<22} | {fb_min_str:<22} |")
+    print(f" {'  Min Latency':<28} | {shm_min_str:<22} | {fb_min_str:<22} |")
     shm_max_str = f'{shmem_max} ms' if shmem_max != 'N/A' else 'N/A'
     fb_max_str = f'{fallback_max} ms' if fallback_max != 'N/A' else 'N/A'
-    print(f" {'Max Latency':<28} | {shm_max_str:<22} | {fb_max_str:<22} |")
+    print(f" {'  Max Latency':<28} | {shm_max_str:<22} | {fb_max_str:<22} |")
     shm_std_str = f'{shmem_std} ms' if shmem_std != 'N/A' else 'N/A'
     fb_std_str = f'{fallback_std} ms' if fallback_std != 'N/A' else 'N/A'
-    print(f" {'Std Dev (Jitter)':<28} | {shm_std_str:<22} | {fb_std_str:<22} |")
-    print(f" {'Outliers (> 3-sigma)':<28} | {str(shmem_outliers):<22} | {str(fallback_outliers):<22} |")
+    print(f" {'  Std Dev (Jitter)':<28} | {shm_std_str:<22} | {fb_std_str:<22} |")
+    print(f" {'  Outliers (> 3-sigma)':<28} | {str(shmem_outliers):<22} | {str(fallback_outliers):<22} |")
+    print('-' * 105)
+    print(" [2] Backend Data-Ready Latency (Pub-to-Payload Pointer Accessible):")
+    shm_dr_p50_str = f'{shmem_dr_p50} ms' if shmem_dr_p50 != 'N/A' else 'N/A'
+    fb_dr_p50_str = f'{fallback_dr_p50} ms' if fallback_dr_p50 != 'N/A' else 'N/A'
+    print(f" {'  P50 Data-Ready Latency':<28} | {shm_dr_p50_str:<22} | {fb_dr_p50_str:<22} |")
+    shm_dr_p95_str = f'{shmem_dr_p95} ms' if shmem_dr_p95 != 'N/A' else 'N/A'
+    fb_dr_p95_str = f'{fallback_dr_p95} ms' if fallback_dr_p95 != 'N/A' else 'N/A'
+    print(f" {'  P95 Data-Ready Latency':<28} | {shm_dr_p95_str:<22} | {fb_dr_p95_str:<22} |")
+    shm_dr_p99_str = f'{shmem_dr_p99} ms' if shmem_dr_p99 != 'N/A' else 'N/A'
+    fb_dr_p99_str = f'{fallback_dr_p99} ms' if fallback_dr_p99 != 'N/A' else 'N/A'
+    print(f" {'  P99 Data-Ready Latency':<28} | {shm_dr_p99_str:<22} | {fb_dr_p99_str:<22} |")
+    shm_dr_mean_str = f'{shmem_dr_mean} ms' if shmem_dr_mean != 'N/A' else 'N/A'
+    fb_dr_mean_str = f'{fallback_dr_mean} ms' if fallback_dr_mean != 'N/A' else 'N/A'
+    print(f" {'  Mean Data-Ready Latency':<28} | {shm_dr_mean_str:<22} | {fb_dr_mean_str:<22} |")
+    shm_dr_std_str = f'{shmem_dr_std} ms' if shmem_dr_std != 'N/A' else 'N/A'
+    fb_dr_std_str = f'{fallback_dr_std} ms' if fallback_dr_std != 'N/A' else 'N/A'
+    print(f" {'  Std Dev Data-Ready':<28} | {shm_dr_std_str:<22} | {fb_dr_std_str:<22} |")
     print('-' * 105)
     pub_cpu_str = f'{pub_cpu_mean}% (Max {pub_cpu_max}%)' if pub_cpu_mean != 'N/A' else 'N/A'
     print(f" {'Publisher CPU Util':<28} | {pub_cpu_str:<22} | {pub_cpu_str:<22} | (Process CPU)")
@@ -356,8 +395,8 @@ def generate_launch_description():
         'auto_exit', default_value='',
         description='Whether nodes should automatically exit (default: true when max_msgs > 0)')
     verify_content_arg = DeclareLaunchArgument(
-        'verify_content', default_value='true',
-        description='Whether subscribers verify pixel payload byte patterns')
+        'verify_content', default_value='false',
+        description='Whether subscribers verify pixel payload byte patterns (false for performance runs, true for correctness)')
     sub_mode_arg = DeclareLaunchArgument(
         'sub_mode', default_value='both',
         description="Subscriber mode: 'both' (default: runs both SHMEM and CPU subscribers), 'shmem' (only SHMEM subscriber), or 'cpu' (only CPU subscriber)")

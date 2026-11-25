@@ -8,10 +8,15 @@ This package benchmarks zero-copy GPU memory sharing via CUDA IPC (Virtual Memor
 
 ## 1. Overview & Capabilities
 
-- **Zero-Copy CUDA IPC**: Uses `cuda_buffer_backend` and NVIDIA CUDA VMM IPC to transport GPU memory handles directly across ROS 2 nodes on the same host without PCIe DtoH / HtoD transfers.
+- **Zero-Copy CUDA IPC**: Uses `cuda_buffer_backend` and NVIDIA CUDA VMM IPC to transport GPU memory handles directly across ROS 2 nodes on the same host without PCIe / host staging copies.
+- **Fair GPU-Ready End-to-End Latency Comparison**:
+  - **CUDA-Native Path**: Publisher allocates CUDA buffer on GPU -> transports via CUDA IPC -> Subscriber imports handle via `cuda_buffer_backend::from_input_buffer()` and synchronizes stream.
+  - **CPU-Backed Path**: Publisher allocates CPU buffer in host RAM -> transports via standard DDS -> Subscriber receives on host -> copies payload to pre-allocated destination GPU buffer via `cudaMemcpyAsync(H2D)` and synchronizes stream.
+  - **Identical Endpoint**: Both paths are measured until the full payload is ready and synchronized in subscriber GPU memory.
+  - **Isolated Breakdown**: Callback entry latency, device operation overhead (H2D copy vs CUDA import/sync), and GPU-ready latency are recorded and reported separately.
 - **Inter-Process Benchmarks**:
   - `cuda_or_wire_pub_sub.launch.py`: Compares `mode:=cuda` (zero-copy) vs `mode:=wire` (standard DDS CPU copy) across configurable resolutions, rates, and message caps.
-  - `cuda_fallback_two_subs.launch.py`: Runs 1 CUDA publisher with 2 concurrent subscribers (one zero-copy GPU subscriber, one standard CPU fallback subscriber) to measure fallback overhead side-by-side.
+  - `cuda_fallback_two_subs.launch.py`: Runs 1 CUDA publisher with 2 concurrent subscribers (one zero-copy GPU subscriber, one standard CPU fallback subscriber with H2D transfer) to measure transport and GPU ingestion overhead side-by-side.
 - **Intra-Process Benchmarks**:
   - `cuda_intra_process_pub_sub.launch.py`: Pub and Sub loaded into the same `component_container` with intra-process communication enabled.
 - **Warm-Up Exclusion**: Automatically ignores initial warm-up messages (`warmup_messages:=10` by default) to eliminate setup, allocator initialization, and DDS discovery transients from the statistics.

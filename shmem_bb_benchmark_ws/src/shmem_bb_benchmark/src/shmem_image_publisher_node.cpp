@@ -102,31 +102,18 @@ void ShmemImagePublisherNode::publish_timer_callback()
   }
 
   const std::size_t seq = sequence_ + 1u;
-  const std::size_t payload_size = static_cast<std::size_t>(image_width_) * image_height_;
-
-  // Measure timestamp using std::chrono::steady_clock for consistent monotonic pub-to-sub latency
-  const auto steady_now = std::chrono::steady_clock::now();
-  const int64_t steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-    steady_now.time_since_epoch()).count();
-
-  if (seq == static_cast<std::size_t>(warmup_messages_ + 1)) {
-    benchmark_start_time_ = steady_now;
-    proc_monitor_.start();
-  }
-  if (seq > static_cast<std::size_t>(warmup_messages_)) {
-    benchmark_end_time_ = steady_now;
-  }
+  const std::size_t bytes_per_pixel = (encoding_ == "rgb8" || encoding_ == "bgr8") ? 3u :
+    ((encoding_ == "rgba8" || encoding_ == "bgra8") ? 4u : 1u);
+  const std::size_t payload_size = static_cast<std::size_t>(image_width_) * image_height_ * bytes_per_pixel;
 
   sensor_msgs::msg::Image msg;
-  msg.header.stamp.sec = static_cast<int32_t>(steady_ns / 1000000000LL);
-  msg.header.stamp.nanosec = static_cast<uint32_t>(steady_ns % 1000000000LL);
-  // Store sequence and steady timestamp nanoseconds in frame_id for robust tracking
-  msg.header.frame_id = "frame_" + std::to_string(seq) + "_" + std::to_string(steady_ns);
+  // Construct frame_id before timestamp capture
+  msg.header.frame_id = "frame_" + std::to_string(seq);
   msg.height = static_cast<std::uint32_t>(image_height_);
   msg.width = static_cast<std::uint32_t>(image_width_);
   msg.encoding = encoding_;
   msg.is_bigendian = 0;
-  msg.step = static_cast<std::uint32_t>(image_width_);
+  msg.step = static_cast<std::uint32_t>(image_width_ * bytes_per_pixel);
 
   if (use_shm_) {
     // Shared-memory backend allocation
@@ -145,7 +132,25 @@ void ShmemImagePublisherNode::publish_timer_callback()
     message_history_.pop_front();
   }
 
-  publisher_->publish(message_history_.back());
+  // Capture steady_clock timestamp IMMEDIATELY before publish() so buffer allocation,
+  // payload initialization, and frame_id construction are excluded from latency
+  const auto steady_now = std::chrono::steady_clock::now();
+  const int64_t steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    steady_now.time_since_epoch()).count();
+
+  if (seq == static_cast<std::size_t>(warmup_messages_ + 1)) {
+    benchmark_start_time_ = steady_now;
+    proc_monitor_.start();
+  }
+  if (seq > static_cast<std::size_t>(warmup_messages_)) {
+    benchmark_end_time_ = steady_now;
+  }
+
+  auto & pub_msg = message_history_.back();
+  pub_msg.header.stamp.sec = static_cast<int32_t>(steady_ns / 1000000000LL);
+  pub_msg.header.stamp.nanosec = static_cast<uint32_t>(steady_ns % 1000000000LL);
+
+  publisher_->publish(pub_msg);
   sequence_ = seq;
 
   std_msgs::msg::UInt32 count_msg;

@@ -173,15 +173,9 @@ def merge_and_print_csv_results(*args, **kwargs):
     p99_speedup = calc_speedup(fallback_p99, cuda_br_p99)
     mean_speedup = calc_speedup(fallback_mean, cuda_br_mean)
 
-    # CUDA sync overhead
-    cuda_sync_overhead = 'N/A'
-    if expect_cuda and cuda_data:
-        try:
-            cb_m = float(cuda_cb_mean)
-            br_m = float(cuda_br_mean)
-            cuda_sync_overhead = f'{max(0.0, br_m - cb_m):.3f} ms'
-        except (ValueError, TypeError):
-            pass
+    # CUDA import/sync vs CPU H2D overhead
+    cuda_device_op = cuda_data.get('device_op_mean_ms', cuda_sync_overhead) if cuda_data else 'N/A'
+    fallback_device_op = fallback_data.get('device_op_mean_ms', 'N/A') if fallback_data else 'N/A'
 
     # Resource telemetry
     pub_cpu_mean = pub_data.get('pub_cpu_mean_pct', src.get('pub_cpu_mean_pct', 'N/A')) if pub_data else src.get('pub_cpu_mean_pct', 'N/A')
@@ -305,7 +299,7 @@ def merge_and_print_csv_results(*args, **kwargs):
     fb_outlier_str = f'{fallback_outliers} frames' if fallback_outliers != 'N/A' else 'N/A'
     print(f" {'  Outliers (> 3-sigma)':<28} | {cu_cb_outlier_str:<22} | {fb_outlier_str:<22} |")
     print('-' * 105)
-    print(" [2] Buffer-Ready Latency (Pub-to-CUDA Synchronized Buffer Ready):")
+    print(" [2] GPU-Ready Latency (Pub-to-Data Fully Available on Subscriber GPU):")
     cu_br_p50_str = f'{cuda_br_p50} ms' if cuda_br_p50 != 'N/A' else 'N/A'
     fb_p50_str = f'{fallback_p50} ms' if fallback_p50 != 'N/A' else 'N/A'
     print(f" {'  P50 Latency (Median)':<28} | {cu_br_p50_str:<22} | {fb_p50_str:<22} | {p50_speedup}")
@@ -328,7 +322,9 @@ def merge_and_print_csv_results(*args, **kwargs):
     print(f" {'  Std Dev (Jitter)':<28} | {cu_br_std_str:<22} | {fb_std_str:<22} |")
     cu_br_outliers_str = f'{cuda_br_outliers} frames' if cuda_br_outliers != 'N/A' else 'N/A'
     print(f" {'  Outliers (> 3-sigma)':<28} | {cu_br_outliers_str:<22} | {fb_outlier_str:<22} | (Never discarded)")
-    print(f" {'  CUDA Sync Overhead':<28} | {cuda_sync_overhead:<22} | {'0.000 ms (N/A)':<22} | Stream sync time")
+    cu_op_str = f'{cuda_device_op} ms' if cuda_device_op != 'N/A' else 'N/A'
+    fb_op_str = f'{fallback_device_op} ms' if fallback_device_op != 'N/A' else 'N/A'
+    print(f" {'  Device Op (H2D / Imp-Sync)':<28} | {cu_op_str:<22} | {fb_op_str:<22} | H2D copy vs CUDA import")
     print('-' * 105)
     print(" [3] System Resource Telemetry:")
     pub_cpu_str = f'Mean: {pub_cpu_mean}% | Max: {pub_cpu_max}% (Dedicated process)' if pub_cpu_mean != 'N/A' else 'N/A'
@@ -382,8 +378,8 @@ def generate_launch_description():
         'history_depth', default_value='80',
         description='History depth for buffer pool retention and QoS queue')
     verify_content_arg = DeclareLaunchArgument(
-        'verify_content', default_value='true',
-        description='Whether to verify payload data integrity')
+        'verify_content', default_value='false',
+        description='Whether to verify payload data integrity (false for performance runs, true for correctness)')
     cuda_device_id_arg = DeclareLaunchArgument(
         'cuda_device_id', default_value='0',
         description='CUDA GPU device ordinal')
@@ -447,7 +443,7 @@ def generate_launch_description():
         parameters=[{
             'topic': LaunchConfiguration('topic'),
             'result_prefix': 'fallback_sub',
-            'use_cuda': False,
+            'use_cuda': True,
             'require_cuda': False,
             'verify_content': verify_content_expr,
             'publish_diagnostics': False,

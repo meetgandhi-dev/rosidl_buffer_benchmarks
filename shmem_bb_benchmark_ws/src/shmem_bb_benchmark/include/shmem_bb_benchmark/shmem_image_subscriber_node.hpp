@@ -70,7 +70,9 @@ private:
   double target_hz_{0.0};
   std::string latency_csv_path_{""};
   std::string summary_csv_path_{""};
-  std::vector<double> latencies_ms_;
+  std::vector<double> latencies_ms_;            // Callback-entry latency (primary transport metric)
+  std::vector<double> data_ready_latencies_ms_; // Valid backend data-ready latencies (for stats)
+  std::vector<double> raw_data_ready_ms_;       // Per-frame data-ready latency (-1.0 if access failed)
 
   std::size_t received_count_{0};
   bool all_valid_{true};
@@ -78,6 +80,9 @@ private:
   std::string last_backend_{"shmem"};
   uint32_t last_width_{0};
   uint32_t last_height_{0};
+  std::size_t last_payload_size_{0};
+  std::size_t failed_data_access_count_{0};
+  std::size_t failed_content_verify_count_{0};
 
   // Frame and sequence tracking for drop detection
   std::size_t last_seq_{0};

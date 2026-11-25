@@ -71,6 +71,7 @@ private:
   std::string summary_csv_path_{""};
 
   std::size_t sequence_{0};
+  std::size_t failed_pub_ops_count_{0};
   std::deque<sensor_msgs::msg::Image> message_history_;
 
   std::chrono::steady_clock::time_point benchmark_start_time_{};

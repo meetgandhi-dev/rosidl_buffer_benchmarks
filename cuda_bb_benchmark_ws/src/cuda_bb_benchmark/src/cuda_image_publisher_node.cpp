@@ -44,8 +44,20 @@ CudaImagePublisherNode::CudaImagePublisherNode(const rclcpp::NodeOptions & optio
   summary_csv_path_ = declare_parameter<std::string>("summary_csv_path", "");
 
   if (use_cuda_) {
-    cudaSetDevice(cuda_device_id_);
-    cudaStreamCreate(&stream_);
+    cudaError_t err = cudaSetDevice(cuda_device_id_);
+    if (err != cudaSuccess) {
+      RCLCPP_FATAL(
+        get_logger(), "cudaSetDevice(%d) failed during publisher initialization: %s",
+        cuda_device_id_, cudaGetErrorString(err));
+      throw std::runtime_error(std::string("cudaSetDevice failed: ") + cudaGetErrorString(err));
+    }
+    err = cudaStreamCreate(&stream_);
+    if (err != cudaSuccess || stream_ == nullptr) {
+      RCLCPP_FATAL(
+        get_logger(), "cudaStreamCreate() failed during publisher initialization: %s",
+        cudaGetErrorString(err));
+      throw std::runtime_error(std::string("cudaStreamCreate failed: ") + cudaGetErrorString(err));
+    }
   }
 
   publisher_ = create_publisher<sensor_msgs::msg::Image>(topic_name_, history_depth_);
@@ -123,7 +135,73 @@ void CudaImagePublisherNode::publish_timer_callback()
     ((encoding_ == "rgba8" || encoding_ == "bgra8") ? 4u : 1u);
   const std::size_t payload_size = static_cast<std::size_t>(image_width_) * image_height_ * bytes_per_pixel;
 
-  // Measure timestamp using std::chrono::steady_clock for consistent monotonic pub-to-sub latency
+  sensor_msgs::msg::Image msg;
+  // Construct frame_id before timestamp capture
+  msg.header.frame_id = "frame_" + std::to_string(seq);
+  msg.height = static_cast<std::uint32_t>(image_height_);
+  msg.width = static_cast<std::uint32_t>(image_width_);
+  msg.encoding = encoding_;
+  msg.is_bigendian = 0;
+  msg.step = static_cast<std::uint32_t>(image_width_ * bytes_per_pixel);
+
+  const uint8_t pattern_byte = generate_sequence_byte(seq);
+
+  if (use_cuda_) {
+    // Allocate CUDA buffer through cuda_buffer_backend pool
+    bool cuda_pub_ok = true;
+    try {
+      msg.data = cuda_buffer_backend::allocate_buffer(payload_size);
+      auto write_handle = cuda_buffer_backend::from_output_buffer(msg.data, stream_);
+      void * dev_ptr = write_handle.get_ptr();
+      if (payload_size > 0 && dev_ptr == nullptr) {
+        cuda_pub_ok = false;
+        RCLCPP_ERROR(
+          get_logger(),
+          "CUDA output buffer pointer is null for non-empty payload (%zu B) on msg #%zu; skipping publish.",
+          payload_size, seq);
+      } else if (payload_size > 0) {
+        cudaError_t err = cudaMemsetAsync(
+          dev_ptr, static_cast<int>(pattern_byte), payload_size, stream_);
+        if (err != cudaSuccess) {
+          cuda_pub_ok = false;
+          RCLCPP_ERROR(
+            get_logger(), "cudaMemsetAsync failed on msg #%zu: %s; skipping publish.",
+            seq, cudaGetErrorString(err));
+        } else {
+          err = cudaStreamSynchronize(stream_);
+          if (err != cudaSuccess) {
+            cuda_pub_ok = false;
+            RCLCPP_ERROR(
+              get_logger(), "cudaStreamSynchronize failed on msg #%zu: %s; skipping publish.",
+              seq, cudaGetErrorString(err));
+          }
+        }
+      }
+    } catch (const std::exception & e) {
+      cuda_pub_ok = false;
+      RCLCPP_ERROR(
+        get_logger(), "Exception preparing CUDA buffer on msg #%zu: %s; skipping publish.",
+        seq, e.what());
+    }
+
+    if (!cuda_pub_ok) {
+      ++failed_pub_ops_count_;
+      return;
+    }
+  } else {
+    // Non-CUDA CPU-backed transport: allocate and populate standard CPU buffer
+    msg.data = rosidl::Buffer<std::uint8_t>(payload_size);
+    std::memset(msg.data.data(), static_cast<int>(pattern_byte), payload_size);
+  }
+
+  // Keep recent published messages alive in pool ring buffer
+  message_history_.push_back(std::move(msg));
+  if (static_cast<int>(message_history_.size()) > history_depth_) {
+    message_history_.pop_front();
+  }
+
+  // Capture publisher timestamp IMMEDIATELY before publish() to avoid counting
+  // buffer preparation, allocation, or frame_id construction in transport latency
   const auto steady_now = std::chrono::steady_clock::now();
   const int64_t steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
     steady_now.time_since_epoch()).count();
@@ -136,38 +214,11 @@ void CudaImagePublisherNode::publish_timer_callback()
     benchmark_end_time_ = steady_now;
   }
 
-  sensor_msgs::msg::Image msg;
-  msg.header.stamp.sec = static_cast<int32_t>(steady_ns / 1000000000LL);
-  msg.header.stamp.nanosec = static_cast<uint32_t>(steady_ns % 1000000000LL);
-  // Store sequence and steady timestamp nanoseconds in frame_id for robust tracking
-  msg.header.frame_id = "frame_" + std::to_string(seq) + "_" + std::to_string(steady_ns);
-  msg.height = static_cast<std::uint32_t>(image_height_);
-  msg.width = static_cast<std::uint32_t>(image_width_);
-  msg.encoding = encoding_;
-  msg.is_bigendian = 0;
-  msg.step = static_cast<std::uint32_t>(image_width_ * bytes_per_pixel);
+  auto & pub_msg = message_history_.back();
+  pub_msg.header.stamp.sec = static_cast<int32_t>(steady_ns / 1000000000LL);
+  pub_msg.header.stamp.nanosec = static_cast<uint32_t>(steady_ns % 1000000000LL);
 
-  const uint8_t pattern_byte = generate_sequence_byte(seq);
-
-  if (use_cuda_) {
-    // Allocate CUDA buffer through cuda_buffer_backend pool
-    msg.data = cuda_buffer_backend::allocate_buffer(payload_size);
-    auto write_handle = cuda_buffer_backend::from_output_buffer(msg.data, stream_);
-    cudaMemsetAsync(write_handle.get_ptr(), static_cast<int>(pattern_byte), payload_size, stream_);
-    cudaStreamSynchronize(stream_);
-  } else {
-    // Non-CUDA fallback: standard CPU buffer
-    msg.data = rosidl::Buffer<std::uint8_t>(payload_size);
-    std::memset(msg.data.data(), static_cast<int>(pattern_byte), payload_size);
-  }
-
-  // Keep recent published messages alive in pool ring buffer
-  message_history_.push_back(std::move(msg));
-  if (static_cast<int>(message_history_.size()) > history_depth_) {
-    message_history_.pop_front();
-  }
-
-  publisher_->publish(message_history_.back());
+  publisher_->publish(pub_msg);
   sequence_ = seq;
 
   std_msgs::msg::UInt32 count_msg;
@@ -206,8 +257,8 @@ void CudaImagePublisherNode::write_publisher_summary(double actual_fps, std::siz
   RCLCPP_INFO(get_logger(), " PUBLISHER SUMMARY REPORT: topic='%s', %dx%d",
     topic_name_.c_str(), image_width_, image_height_);
   RCLCPP_INFO(get_logger(), "--------------------------------------------------------------------------");
-  RCLCPP_INFO(get_logger(), " Throughput:  Target: %.1f Hz | Actual Pub: %.2f FPS | Total Published: %zu",
-    publish_rate_hz_, actual_fps, total_sent);
+  RCLCPP_INFO(get_logger(), " Throughput:  Target: %.1f Hz | Actual Pub: %.2f FPS | Total Published: %zu | Failed Pub Ops: %zu",
+    publish_rate_hz_, actual_fps, total_sent, failed_pub_ops_count_);
   RCLCPP_INFO(get_logger(), " Resources:   Publisher CPU Util: Mean: %.1f%% | Max: %.1f%%",
     sys_summary.process_cpu_mean_pct, sys_summary.process_cpu_max_pct);
   RCLCPP_INFO(get_logger(), "              Publisher RSS:      Mean: %.1f MB | Peak: %.1f MB",
