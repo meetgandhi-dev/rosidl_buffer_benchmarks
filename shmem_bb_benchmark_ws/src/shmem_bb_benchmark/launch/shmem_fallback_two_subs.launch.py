@@ -395,8 +395,8 @@ def generate_launch_description():
         'auto_exit', default_value='',
         description='Whether nodes should automatically exit (default: true when max_msgs > 0)')
     verify_content_arg = DeclareLaunchArgument(
-        'verify_content', default_value='false',
-        description='Whether subscribers verify pixel payload byte patterns (false for performance runs, true for correctness)')
+        'verify_content', default_value='true',
+        description='Whether subscribers verify pixel payload byte patterns')
     sub_mode_arg = DeclareLaunchArgument(
         'sub_mode', default_value='both',
         description="Subscriber mode: 'both' (default: runs both SHMEM and CPU subscribers), 'shmem' (only SHMEM subscriber), or 'cpu' (only CPU subscriber)")

@@ -163,8 +163,8 @@ def generate_launch_description():
         'auto_exit', default_value='',
         description='Whether nodes should automatically exit (default: true when max_msgs > 0)')
     verify_content_arg = DeclareLaunchArgument(
-        'verify_content', default_value='false',
-        description='Whether subscriber verifies pixel payload byte patterns (false for performance runs, true for correctness)')
+        'verify_content', default_value='true',
+        description='Whether subscriber verifies pixel payload byte patterns')
 
     # Resolve effective max messages
     effective_max_msgs = PythonExpression([

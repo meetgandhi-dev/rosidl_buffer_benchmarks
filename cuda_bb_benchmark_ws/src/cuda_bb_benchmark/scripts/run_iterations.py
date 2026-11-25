@@ -266,6 +266,7 @@ def main():
             f'rate:={args.rate:.1f}',
             f'max_msgs:={args.max_msgs}',
             f'sub_mode:={args.sub_mode}',
+            'verify_content:=true',
             f'csv_path:={tmp_path}',
         ]
 

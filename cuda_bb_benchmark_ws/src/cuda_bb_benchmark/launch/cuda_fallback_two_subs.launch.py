@@ -378,8 +378,8 @@ def generate_launch_description():
         'history_depth', default_value='80',
         description='History depth for buffer pool retention and QoS queue')
     verify_content_arg = DeclareLaunchArgument(
-        'verify_content', default_value='false',
-        description='Whether to verify payload data integrity (false for performance runs, true for correctness)')
+        'verify_content', default_value='true',
+        description='Whether to verify payload data integrity')
     cuda_device_id_arg = DeclareLaunchArgument(
         'cuda_device_id', default_value='0',
         description='CUDA GPU device ordinal')

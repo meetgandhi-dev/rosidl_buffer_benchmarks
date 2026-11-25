@@ -180,8 +180,8 @@ def generate_launch_description():
         'auto_exit', default_value='',
         description='Whether nodes should automatically exit (default: true when max_msgs > 0)')
     verify_content_arg = DeclareLaunchArgument(
-        'verify_content', default_value='false',
-        description='Whether to verify payload data integrity (false for performance runs, true for correctness)')
+        'verify_content', default_value='true',
+        description='Whether to verify payload data integrity')
     cuda_device_id_arg = DeclareLaunchArgument(
         'cuda_device_id', default_value='0',
         description='CUDA GPU device ordinal')
