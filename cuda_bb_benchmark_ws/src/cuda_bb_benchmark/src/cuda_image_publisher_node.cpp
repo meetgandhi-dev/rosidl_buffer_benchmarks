@@ -16,6 +16,8 @@
 
 #include <chrono>
 #include <cstring>
+#include <thread>
+#include <unistd.h>
 #include <utility>
 
 #include "rclcpp_components/register_node_macro.hpp"
@@ -121,6 +123,11 @@ void CudaImagePublisherNode::publish_timer_callback()
           if (rclcpp::ok()) {
             rclcpp::shutdown();
           }
+          // Safety watchdog: ensure publisher terminates and does not hang on DDS teardown
+          std::thread([]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+            _exit(0);
+          }).detach();
         });
     }
     return;

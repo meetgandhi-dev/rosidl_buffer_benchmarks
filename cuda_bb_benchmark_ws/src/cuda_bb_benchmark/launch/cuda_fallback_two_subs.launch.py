@@ -368,15 +368,9 @@ def generate_launch_description():
     csv_path_arg = DeclareLaunchArgument(
         'csv_path', default_value='/tmp/cuda_fallback_comparison.csv',
         description='Path to save output comparison CSV results')
-    topic_arg = DeclareLaunchArgument(
-        'topic', default_value='test_cuda_image',
-        description='Topic name for image streaming')
     history_depth_arg = DeclareLaunchArgument(
         'history_depth', default_value='80',
         description='History depth for buffer pool retention and QoS queue')
-    verify_content_arg = DeclareLaunchArgument(
-        'verify_content', default_value='true',
-        description='Whether to verify payload data integrity')
     cuda_device_id_arg = DeclareLaunchArgument(
         'cuda_device_id', default_value='0',
         description='CUDA GPU device ordinal')
@@ -390,13 +384,11 @@ def generate_launch_description():
         'fallback_latency_csv_path', default_value='',
         description='Optional path to save raw per-frame fallback CPU latency CSV')
 
-    auto_exit_expr = PythonExpression([
-        "'true' if int('", LaunchConfiguration('max_msgs'), "') > 0 else 'false'"
+    effective_max_msgs = PythonExpression([
+        "'1000' if int('", LaunchConfiguration('max_msgs'), "') <= 0 else '",
+        LaunchConfiguration('max_msgs'), "'"
     ])
 
-    verify_content_expr = PythonExpression([
-        "'", LaunchConfiguration('verify_content'), "'.strip().lower() in ['true', '1', 'yes']"
-    ])
 
     run_cuda_sub = IfCondition(
         PythonExpression([
@@ -421,19 +413,19 @@ def generate_launch_description():
         condition=run_cuda_sub,
         output='screen',
         parameters=[{
-            'topic': LaunchConfiguration('topic'),
+            'topic': 'test_cuda_image',
             'result_prefix': 'cuda_sub',
             'use_cuda': True,
             'require_cuda': True,
-            'verify_content': verify_content_expr,
+            'verify_content': True,
             'publish_diagnostics': False,
             'history_depth': LaunchConfiguration('history_depth'),
-            'max_messages': LaunchConfiguration('max_msgs'),
+            'max_messages': effective_max_msgs,
             'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'target_hz': LaunchConfiguration('rate'),
             'summary_csv_path': cuda_tmp_csv,
             'latency_csv_path': LaunchConfiguration('cuda_latency_csv_path'),
-            'auto_exit': auto_exit_expr,
+            'auto_exit': True,
             'cuda_device_id': LaunchConfiguration('cuda_device_id'),
         }],
     )
@@ -445,19 +437,19 @@ def generate_launch_description():
         condition=run_fallback_sub,
         output='screen',
         parameters=[{
-            'topic': LaunchConfiguration('topic'),
+            'topic': 'test_cuda_image',
             'result_prefix': 'fallback_sub',
             'use_cuda': True,
             'require_cuda': False,
-            'verify_content': verify_content_expr,
+            'verify_content': True,
             'publish_diagnostics': False,
             'history_depth': LaunchConfiguration('history_depth'),
-            'max_messages': LaunchConfiguration('max_msgs'),
+            'max_messages': effective_max_msgs,
             'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'target_hz': LaunchConfiguration('rate'),
             'summary_csv_path': fallback_tmp_csv,
             'latency_csv_path': LaunchConfiguration('fallback_latency_csv_path'),
-            'auto_exit': auto_exit_expr,
+            'auto_exit': True,
             'cuda_device_id': LaunchConfiguration('cuda_device_id'),
         }],
     )
@@ -468,17 +460,17 @@ def generate_launch_description():
         name='cuda_publisher',
         output='screen',
         parameters=[{
-            'topic': LaunchConfiguration('topic'),
+            'topic': 'test_cuda_image',
             'rate': LaunchConfiguration('rate'),
             'width': LaunchConfiguration('width'),
             'height': LaunchConfiguration('height'),
             'use_cuda': True,
             'wait_for_subscriber': True,
             'history_depth': LaunchConfiguration('history_depth'),
-            'max_messages': LaunchConfiguration('max_msgs'),
+            'max_messages': effective_max_msgs,
             'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'summary_csv_path': pub_tmp_csv,
-            'auto_exit': auto_exit_expr,
+            'auto_exit': True,
             'cuda_device_id': LaunchConfiguration('cuda_device_id'),
         }],
     )
@@ -527,9 +519,7 @@ def generate_launch_description():
         max_msgs_arg,
         warmup_msgs_arg,
         csv_path_arg,
-        topic_arg,
         history_depth_arg,
-        verify_content_arg,
         cuda_device_id_arg,
         sub_mode_arg,
         cuda_latency_csv_path_arg,

@@ -358,9 +358,6 @@ def generate_launch_description():
     max_msgs_arg = DeclareLaunchArgument(
         'max_msgs', default_value='1000',
         description='Maximum messages to publish/receive (default: 1000; set 0 for continuous)')
-    max_messages_alias_arg = DeclareLaunchArgument(
-        'max_messages', default_value='',
-        description='Alias for max_msgs')
     warmup_msgs_arg = DeclareLaunchArgument(
         'warmup_msgs', default_value='10',
         description='Number of warm-up messages to ignore during setup (default: 10)')
@@ -369,18 +366,9 @@ def generate_launch_description():
     csv_path_arg = DeclareLaunchArgument(
         'csv_path', default_value='/tmp/shmem_fallback_comparison.csv',
         description='Path to save output comparison CSV results')
-    topic_arg = DeclareLaunchArgument(
-        'topic', default_value='test_shmem_image',
-        description='Topic name for image streaming')
     history_depth_arg = DeclareLaunchArgument(
         'history_depth', default_value='80',
         description='History depth for buffer pool retention and QoS queue')
-    auto_exit_arg = DeclareLaunchArgument(
-        'auto_exit', default_value='',
-        description='Whether nodes should automatically exit (default: true when max_msgs > 0)')
-    verify_content_arg = DeclareLaunchArgument(
-        'verify_content', default_value='true',
-        description='Whether subscribers verify pixel payload byte patterns')
     sub_mode_arg = DeclareLaunchArgument(
         'sub_mode', default_value='both',
         description="Subscriber mode: 'both' (default: runs both SHMEM and CPU subscribers), 'shmem' (only SHMEM subscriber), or 'cpu' (only CPU subscriber)")
@@ -391,23 +379,13 @@ def generate_launch_description():
         'fallback_latency_csv_path', default_value='',
         description='Optional path to save raw per-frame fallback CPU latency CSV')
 
-    # Resolve effective max messages
+    # Resolve effective max messages (0 or negative falls back to default 1000)
     effective_max_msgs = PythonExpression([
-        "'", LaunchConfiguration('max_messages'), "' if '",
-        LaunchConfiguration('max_messages'), "' != '' else '",
+        "'1000' if int('", LaunchConfiguration('max_msgs'), "') <= 0 else '",
         LaunchConfiguration('max_msgs'), "'"
     ])
 
-    # Auto exit expression: true if max_messages > 0
-    auto_exit_expr = PythonExpression([
-        "'", LaunchConfiguration('auto_exit'), "' if '",
-        LaunchConfiguration('auto_exit'), "' != '' else (",
-        "'true' if int('", effective_max_msgs, "') > 0 else 'false')"
-    ])
 
-    verify_content_expr = PythonExpression([
-        "'", LaunchConfiguration('verify_content'), "'.strip().lower() in ['true', '1', 'yes']"
-    ])
 
     run_shmem_sub = IfCondition(
         PythonExpression([
@@ -434,11 +412,11 @@ def generate_launch_description():
         condition=run_shmem_sub,
         output='screen',
         parameters=[{
-            'topic': LaunchConfiguration('topic'),
+            'topic': 'test_shmem_image',
             'result_prefix': 'sub_shared',
             'use_shm': True,
             'require_shmem': True,
-            'verify_content': verify_content_expr,
+            'verify_content': True,
             'publish_diagnostics': False,
             'history_depth': LaunchConfiguration('history_depth'),
             'max_messages': effective_max_msgs,
@@ -446,7 +424,7 @@ def generate_launch_description():
             'target_hz': LaunchConfiguration('rate'),
             'summary_csv_path': shmem_tmp_csv,
             'latency_csv_path': LaunchConfiguration('shmem_latency_csv_path'),
-            'auto_exit': auto_exit_expr,
+            'auto_exit': True,
         }],
     )
 
@@ -458,11 +436,11 @@ def generate_launch_description():
         condition=run_fallback_sub,
         output='screen',
         parameters=[{
-            'topic': LaunchConfiguration('topic'),
+            'topic': 'test_shmem_image',
             'result_prefix': 'sub_fallback',
             'use_shm': False,
             'require_shmem': False,
-            'verify_content': verify_content_expr,
+            'verify_content': True,
             'publish_diagnostics': False,
             'history_depth': LaunchConfiguration('history_depth'),
             'max_messages': effective_max_msgs,
@@ -470,7 +448,7 @@ def generate_launch_description():
             'target_hz': LaunchConfiguration('rate'),
             'summary_csv_path': fallback_tmp_csv,
             'latency_csv_path': LaunchConfiguration('fallback_latency_csv_path'),
-            'auto_exit': auto_exit_expr,
+            'auto_exit': True,
         }],
     )
 
@@ -481,7 +459,7 @@ def generate_launch_description():
         name='publisher_shared',
         output='screen',
         parameters=[{
-            'topic': LaunchConfiguration('topic'),
+            'topic': 'test_shmem_image',
             'rate': LaunchConfiguration('rate'),
             'width': LaunchConfiguration('width'),
             'height': LaunchConfiguration('height'),
@@ -491,7 +469,7 @@ def generate_launch_description():
             'max_messages': effective_max_msgs,
             'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'summary_csv_path': pub_tmp_csv,
-            'auto_exit': auto_exit_expr,
+            'auto_exit': True,
         }],
     )
 
@@ -537,13 +515,9 @@ def generate_launch_description():
         height_arg,
         rate_arg,
         max_msgs_arg,
-        max_messages_alias_arg,
         warmup_msgs_arg,
         csv_path_arg,
-        topic_arg,
         history_depth_arg,
-        auto_exit_arg,
-        verify_content_arg,
         sub_mode_arg,
         shmem_latency_csv_path_arg,
         fallback_latency_csv_path_arg,

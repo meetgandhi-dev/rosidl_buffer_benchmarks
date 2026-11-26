@@ -167,9 +167,6 @@ def generate_launch_description():
     max_msgs_arg = DeclareLaunchArgument(
         'max_msgs', default_value='1000',
         description='Maximum messages to publish/receive (default: 1000; set 0 for continuous)')
-    max_messages_alias_arg = DeclareLaunchArgument(
-        'max_messages', default_value='',
-        description='Alias for max_msgs')
     warmup_msgs_arg = DeclareLaunchArgument(
         'warmup_msgs', default_value='10',
         description='Number of warm-up messages to ignore during setup (default: 10)')
@@ -177,25 +174,18 @@ def generate_launch_description():
     csv_path_arg = DeclareLaunchArgument(
         'csv_path', default_value='/tmp/cuda_mode_results.csv',
         description='Path to save output summary CSV results')
-    topic_arg = DeclareLaunchArgument(
-        'topic', default_value='test_cuda_image',
-        description='Topic name for image streaming')
     history_depth_arg = DeclareLaunchArgument(
         'history_depth', default_value='80',
         description='History depth for buffer pool retention and QoS queue')
-    auto_exit_arg = DeclareLaunchArgument(
-        'auto_exit', default_value='',
-        description='Whether nodes should automatically exit (default: true when max_msgs > 0)')
-    verify_content_arg = DeclareLaunchArgument(
-        'verify_content', default_value='true',
-        description='Whether to verify payload data integrity')
     cuda_device_id_arg = DeclareLaunchArgument(
         'cuda_device_id', default_value='0',
         description='CUDA GPU device ordinal')
+    latency_csv_path_arg = DeclareLaunchArgument(
+        'latency_csv_path', default_value='',
+        description='Optional path to save raw per-frame latency CSV')
 
     effective_max_msgs = PythonExpression([
-        "'", LaunchConfiguration('max_messages'), "' if '",
-        LaunchConfiguration('max_messages'), "' != '' else '",
+        "'1000' if int('", LaunchConfiguration('max_msgs'), "') <= 0 else '",
         LaunchConfiguration('max_msgs'), "'"
     ])
 
@@ -203,15 +193,7 @@ def generate_launch_description():
         "'", LaunchConfiguration('mode'), "'.strip().lower() in ['cuda', 'gpu', 'true', '1']"
     ])
 
-    auto_exit_expr = PythonExpression([
-        "'", LaunchConfiguration('auto_exit'), "' if '",
-        LaunchConfiguration('auto_exit'), "' != '' else (",
-        "'true' if int('", effective_max_msgs, "') > 0 else 'false')"
-    ])
 
-    verify_content_expr = PythonExpression([
-        "'", LaunchConfiguration('verify_content'), "'.strip().lower() in ['true', '1', 'yes']"
-    ])
 
     subscriber_node = Node(
         package='cuda_bb_benchmark',
@@ -219,18 +201,19 @@ def generate_launch_description():
         name='cuda_image_subscriber',
         output='screen',
         parameters=[{
-            'topic': LaunchConfiguration('topic'),
+            'topic': 'test_cuda_image',
             'result_prefix': 'cuda_bench',
             'use_cuda': True,
             'require_cuda': use_cuda,
-            'verify_content': verify_content_expr,
+            'verify_content': True,
             'publish_diagnostics': False,
             'history_depth': LaunchConfiguration('history_depth'),
             'max_messages': effective_max_msgs,
             'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'target_hz': LaunchConfiguration('rate'),
             'summary_csv_path': LaunchConfiguration('csv_path'),
-            'auto_exit': auto_exit_expr,
+            'latency_csv_path': LaunchConfiguration('latency_csv_path'),
+            'auto_exit': True,
             'cuda_device_id': LaunchConfiguration('cuda_device_id'),
         }],
     )
@@ -241,7 +224,7 @@ def generate_launch_description():
         name='cuda_image_publisher',
         output='screen',
         parameters=[{
-            'topic': LaunchConfiguration('topic'),
+            'topic': 'test_cuda_image',
             'rate': LaunchConfiguration('rate'),
             'width': LaunchConfiguration('width'),
             'height': LaunchConfiguration('height'),
@@ -250,7 +233,7 @@ def generate_launch_description():
             'history_depth': LaunchConfiguration('history_depth'),
             'max_messages': effective_max_msgs,
             'warmup_messages': LaunchConfiguration('warmup_msgs'),
-            'auto_exit': auto_exit_expr,
+            'auto_exit': True,
             'cuda_device_id': LaunchConfiguration('cuda_device_id'),
         }],
     )
@@ -283,14 +266,11 @@ def generate_launch_description():
         rate_arg,
         mode_arg,
         max_msgs_arg,
-        max_messages_alias_arg,
         warmup_msgs_arg,
         csv_path_arg,
-        topic_arg,
         history_depth_arg,
-        auto_exit_arg,
-        verify_content_arg,
         cuda_device_id_arg,
+        latency_csv_path_arg,
         OpaqueFunction(function=init_csv_file),
         subscriber_node,
         delayed_publisher,

@@ -394,6 +394,8 @@ def main():
     )
 
     args = parser.parse_args()
+    if args.max_msgs <= 0:
+        args.max_msgs = 1000
     width, height = args.resolution
 
     expect_cu = args.sub_mode in ('both', 'cuda')
@@ -431,7 +433,6 @@ def main():
             f'rate:={args.rate:.1f}',
             f'max_msgs:={args.max_msgs}',
             f'sub_mode:={args.sub_mode}',
-            'verify_content:=true',
             f'csv_path:={tmp_path}',
         ]
         if cu_lat_path:
