@@ -384,6 +384,12 @@ def generate_launch_description():
     sub_mode_arg = DeclareLaunchArgument(
         'sub_mode', default_value='both',
         description="Subscriber mode: 'both' (default: runs both SHMEM and CPU subscribers), 'shmem' (only SHMEM subscriber), or 'cpu' (only CPU subscriber)")
+    shmem_latency_csv_path_arg = DeclareLaunchArgument(
+        'shmem_latency_csv_path', default_value='',
+        description='Optional path to save raw per-frame SHMEM latency CSV')
+    fallback_latency_csv_path_arg = DeclareLaunchArgument(
+        'fallback_latency_csv_path', default_value='',
+        description='Optional path to save raw per-frame fallback CPU latency CSV')
 
     # Resolve effective max messages
     effective_max_msgs = PythonExpression([
@@ -439,6 +445,7 @@ def generate_launch_description():
             'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'target_hz': LaunchConfiguration('rate'),
             'summary_csv_path': shmem_tmp_csv,
+            'latency_csv_path': LaunchConfiguration('shmem_latency_csv_path'),
             'auto_exit': auto_exit_expr,
         }],
     )
@@ -462,6 +469,7 @@ def generate_launch_description():
             'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'target_hz': LaunchConfiguration('rate'),
             'summary_csv_path': fallback_tmp_csv,
+            'latency_csv_path': LaunchConfiguration('fallback_latency_csv_path'),
             'auto_exit': auto_exit_expr,
         }],
     )
@@ -537,6 +545,8 @@ def generate_launch_description():
         auto_exit_arg,
         verify_content_arg,
         sub_mode_arg,
+        shmem_latency_csv_path_arg,
+        fallback_latency_csv_path_arg,
         OpaqueFunction(function=init_csv_file),
         subscriber_shared,
         subscriber_fallback,

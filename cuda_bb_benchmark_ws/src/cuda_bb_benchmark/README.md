@@ -17,8 +17,6 @@ This package benchmarks zero-copy GPU memory sharing via CUDA IPC (Virtual Memor
 - **Inter-Process Benchmarks**:
   - `cuda_or_wire_pub_sub.launch.py`: Compares `mode:=cuda` (zero-copy) vs `mode:=wire` (standard DDS CPU copy) across configurable resolutions, rates, and message caps.
   - `cuda_fallback_two_subs.launch.py`: Runs 1 CUDA publisher with 2 concurrent subscribers (one zero-copy GPU subscriber, one standard CPU fallback subscriber with H2D transfer) to measure transport and GPU ingestion overhead side-by-side.
-- **Intra-Process Benchmarks**:
-  - `cuda_intra_process_pub_sub.launch.py`: Pub and Sub loaded into the same `component_container` with intra-process communication enabled.
 - **Warm-Up Exclusion**: Automatically ignores initial warm-up messages (`warmup_messages:=10` by default) to eliminate setup, allocator initialization, and DDS discovery transients from the statistics.
 - **Iteration Benchmark Script**:
   - `run_iterations.py`: Runs repeated benchmark iterations for a single resolution (min: 1, max: 10) and calculates individual and averaged results.
@@ -67,19 +65,7 @@ ros2 launch cuda_bb_benchmark cuda_fallback_two_subs.launch.py \
   width:=1920 height:=1080 rate:=30.0 max_msgs:=1000
 ```
 
-### 4.3 Intra-Process (Same Process)
-
-```bash
-# Intra-process with CUDA backend
-ros2 launch cuda_bb_benchmark cuda_intra_process_pub_sub.launch.py \
-  width:=1920 height:=1080 rate:=30.0 mode:=cuda max_msgs:=1000
-
-# Intra-process with CPU backend
-ros2 launch cuda_bb_benchmark cuda_intra_process_pub_sub.launch.py \
-  width:=1920 height:=1080 rate:=30.0 mode:=cpu max_msgs:=1000
-```
-
-### 4.4 Repeated Iterations & Averages
+### 4.3 Repeated Iterations & Averages
 
 ```bash
 ros2 run cuda_bb_benchmark run_iterations.py \

@@ -383,6 +383,12 @@ def generate_launch_description():
     sub_mode_arg = DeclareLaunchArgument(
         'sub_mode', default_value='both',
         description="Subscriber mode: 'both' (default: runs both CUDA and CPU subscribers), 'cuda' (only CUDA subscriber), or 'cpu' (only CPU subscriber)")
+    cuda_latency_csv_path_arg = DeclareLaunchArgument(
+        'cuda_latency_csv_path', default_value='',
+        description='Optional path to save raw per-frame CUDA latency CSV')
+    fallback_latency_csv_path_arg = DeclareLaunchArgument(
+        'fallback_latency_csv_path', default_value='',
+        description='Optional path to save raw per-frame fallback CPU latency CSV')
 
     auto_exit_expr = PythonExpression([
         "'true' if int('", LaunchConfiguration('max_msgs'), "') > 0 else 'false'"
@@ -426,6 +432,7 @@ def generate_launch_description():
             'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'target_hz': LaunchConfiguration('rate'),
             'summary_csv_path': cuda_tmp_csv,
+            'latency_csv_path': LaunchConfiguration('cuda_latency_csv_path'),
             'auto_exit': auto_exit_expr,
             'cuda_device_id': LaunchConfiguration('cuda_device_id'),
         }],
@@ -449,6 +456,7 @@ def generate_launch_description():
             'warmup_messages': LaunchConfiguration('warmup_msgs'),
             'target_hz': LaunchConfiguration('rate'),
             'summary_csv_path': fallback_tmp_csv,
+            'latency_csv_path': LaunchConfiguration('fallback_latency_csv_path'),
             'auto_exit': auto_exit_expr,
             'cuda_device_id': LaunchConfiguration('cuda_device_id'),
         }],
@@ -524,6 +532,8 @@ def generate_launch_description():
         verify_content_arg,
         cuda_device_id_arg,
         sub_mode_arg,
+        cuda_latency_csv_path_arg,
+        fallback_latency_csv_path_arg,
         OpaqueFunction(function=init_csv_file),
         cuda_subscriber_node,
         fallback_subscriber_node,

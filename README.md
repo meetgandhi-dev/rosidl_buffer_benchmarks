@@ -193,24 +193,6 @@ ros2 launch shmem_bb_benchmark shmem_or_wire_pub_sub.launch.py \
   csv_path:=$(pwd)/results/1080p_30fps_wire.csv
 ```
 
-#### Option C: Intra-Process Comparison (Same Process: SHM vs. CPU)
-
-Runs both publisher and subscriber **inside the same OS process** using a `ComposableNodeContainer`
-with `use_intra_process_comms: True`. The message `shared_ptr` is delivered directly with no
-serialization, no DDS overhead, and no inter-process copy at all:
-
-```bash
-# Intra-process with shared memory backend:
-ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \
-  width:=1920 height:=1080 rate:=30.0 mode:=shmem max_msgs:=1000 \
-  csv_path:=$(pwd)/results/1080p_30fps_intra_shmem.csv
-
-# Intra-process with CPU backend:
-ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \
-  width:=1920 height:=1080 rate:=30.0 mode:=cpu max_msgs:=1000 \
-  csv_path:=$(pwd)/results/1080p_30fps_intra_cpu.csv
-```
-
 #### Shared Memory Transport Coverage Summary
 
 | Path | Communication | Backend | Launch File |
@@ -218,10 +200,8 @@ ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \
 | SHM zero-copy + wire fallback | Inter-process | `shmem` + `cpu` | `shmem_fallback_two_subs.launch.py` |
 | SHM zero-copy only | Inter-process | `shmem` | `shmem_or_wire_pub_sub.launch.py mode:=shared` |
 | DDS wire/serialized only | Inter-process | `cpu` | `shmem_or_wire_pub_sub.launch.py mode:=wire` |
-| SHM backend, same process | Intra-process | `shmem` | `intra_process_pub_sub.launch.py mode:=shmem` |
-| CPU backend, same process | Intra-process | `cpu` | `intra_process_pub_sub.launch.py mode:=cpu` |
 
-#### Option D: Iteration Benchmark Runner (`run_iterations.py`)
+#### Option C: Iteration Benchmark Runner (`run_iterations.py`)
 
 Runs repeated benchmark iterations for a single resolution (min: 1, max: 10) and calculates both individual run statistics and overall averages:
 
@@ -285,22 +265,6 @@ ros2 launch cuda_bb_benchmark cuda_or_wire_pub_sub.launch.py \
   csv_path:=$(pwd)/results/cuda_1080p_wire.csv
 ```
 
-#### Option C: Intra-Process Comparison (Same Process: CUDA vs. CPU)
-
-Runs publisher and subscriber in the same process using `ComposableNodeContainer` with `use_intra_process_comms=True`:
-
-```bash
-# Intra-process with CUDA buffer backend:
-ros2 launch cuda_bb_benchmark cuda_intra_process_pub_sub.launch.py \
-  width:=1920 height:=1080 rate:=30.0 mode:=cuda max_msgs:=1000 \
-  csv_path:=$(pwd)/results/cuda_1080p_intra_cuda.csv
-
-# Intra-process with CPU buffer:
-ros2 launch cuda_bb_benchmark cuda_intra_process_pub_sub.launch.py \
-  width:=1920 height:=1080 rate:=30.0 mode:=cpu max_msgs:=1000 \
-  csv_path:=$(pwd)/results/cuda_1080p_intra_cpu.csv
-```
-
 #### CUDA Transport Coverage Summary
 
 | Path | Communication | Backend | Launch File |
@@ -308,10 +272,8 @@ ros2 launch cuda_bb_benchmark cuda_intra_process_pub_sub.launch.py \
 | CUDA zero-copy + wire fallback | Inter-process | `cuda` + `cpu` | `cuda_fallback_two_subs.launch.py` |
 | CUDA zero-copy only | Inter-process | `cuda` | `cuda_or_wire_pub_sub.launch.py mode:=cuda` |
 | DDS wire/serialized only | Inter-process | `cpu` | `cuda_or_wire_pub_sub.launch.py mode:=wire` |
-| CUDA backend, same process | Intra-process | `cuda` | `cuda_intra_process_pub_sub.launch.py mode:=cuda` |
-| CPU backend, same process | Intra-process | `cpu` | `cuda_intra_process_pub_sub.launch.py mode:=cpu` |
 
-#### Option D: Iteration Benchmark Runner (`run_iterations.py`)
+#### Option C: Iteration Benchmark Runner (`run_iterations.py`)
 
 Runs repeated benchmark iterations for a single resolution (min: 1, max: 10) and calculates both individual run statistics and overall averages:
 
@@ -453,9 +415,4 @@ cd ..
 ros2 launch shmem_bb_benchmark shmem_fallback_two_subs.launch.py \
   width:=1920 height:=1080 rate:=30.0 max_msgs:=1000 \
   csv_path:=$(pwd)/results/1080p_30fps_two_subs_comparison.csv
-
-# 4. Reproduce Intra-Process Zero-Copy vs CPU Benchmark (1000 frames)
-ros2 launch shmem_bb_benchmark intra_process_pub_sub.launch.py \
-  width:=1920 height:=1080 rate:=30.0 mode:=shmem max_msgs:=1000 \
-  csv_path:=$(pwd)/results/1080p_30fps_intra_shmem.csv
 ```
