@@ -49,11 +49,13 @@ public:
 private:
   void image_callback(sensor_msgs::msg::Image::ConstSharedPtr msg);
   void pub_report_callback(std_msgs::msg::String::ConstSharedPtr msg);
+  void finalize_benchmark();
   void write_summary_report(const std::string & backend, uint32_t width, uint32_t height);
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr pub_report_sub_;
   rclcpp::TimerBase::SharedPtr watchdog_timer_;
+  rclcpp::TimerBase::SharedPtr report_wait_timer_;
   rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr count_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr backend_valid_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr content_valid_pub_;
@@ -111,11 +113,14 @@ private:
   // Telemetry from Publisher Report
   double pub_fps_{0.0};
   std::size_t pub_total_frames_{0};
+  bool pub_cpu_available_{false};
   double pub_cpu_mean_pct_{0.0};
   double pub_cpu_max_pct_{0.0};
-  double pub_rss_mean_mb_{0.0};
-  double pub_rss_peak_mb_{0.0};
+  bool pub_pss_available_{false};
+  double pub_pss_mean_mb_{0.0};
+  double pub_pss_peak_mb_{0.0};
   bool pub_report_received_{false};
+  bool waiting_for_pub_report_{false};
 
   // System resource monitor
   SystemMonitor sys_monitor_;

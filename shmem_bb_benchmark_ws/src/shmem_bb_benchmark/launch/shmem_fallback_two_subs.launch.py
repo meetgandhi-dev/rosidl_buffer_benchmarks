@@ -165,24 +165,19 @@ def merge_and_print_csv_results(*args, **kwargs):
     fallback_dr_std = fallback_data.get('data_ready_std_dev_ms', 'N/A') if fallback_data else 'N/A'
 
     pub_cpu_mean = pub_data.get('pub_cpu_mean_pct', src.get('pub_cpu_mean_pct', 'N/A')) if pub_data else src.get('pub_cpu_mean_pct', 'N/A')
-    pub_cpu_max = pub_data.get('pub_cpu_max_pct', src.get('pub_cpu_max_pct', 'N/A')) if pub_data else src.get('pub_cpu_max_pct', 'N/A')
+    pub_cpu_peak = pub_data.get('pub_cpu_peak_pct', src.get('pub_cpu_peak_pct', 'N/A')) if pub_data else src.get('pub_cpu_peak_pct', 'N/A')
 
-    shmem_sub_cpu_mean = shmem_data.get('sub_cpu_mean_pct', shmem_data.get('cpu_util_mean_pct', 'N/A')) if shmem_data else 'N/A'
-    shmem_sub_cpu_max = shmem_data.get('sub_cpu_max_pct', shmem_data.get('cpu_util_max_pct', 'N/A')) if shmem_data else 'N/A'
-    fallback_sub_cpu_mean = fallback_data.get('sub_cpu_mean_pct', fallback_data.get('cpu_util_mean_pct', 'N/A')) if fallback_data else 'N/A'
-    fallback_sub_cpu_max = fallback_data.get('sub_cpu_max_pct', fallback_data.get('cpu_util_max_pct', 'N/A')) if fallback_data else 'N/A'
+    shmem_sub_cpu_mean = shmem_data.get('sub_cpu_mean_pct', 'N/A') if shmem_data else 'N/A'
+    shmem_sub_cpu_peak = shmem_data.get('sub_cpu_peak_pct', 'N/A') if shmem_data else 'N/A'
+    fallback_sub_cpu_mean = fallback_data.get('sub_cpu_mean_pct', 'N/A') if fallback_data else 'N/A'
+    fallback_sub_cpu_peak = fallback_data.get('sub_cpu_peak_pct', 'N/A') if fallback_data else 'N/A'
 
-    pub_rss_peak = pub_data.get('pub_rss_peak_mb', src.get('pub_rss_peak_mb', 'N/A')) if pub_data else src.get('pub_rss_peak_mb', 'N/A')
-    shmem_sub_rss_peak = shmem_data.get('sub_rss_peak_mb', shmem_data.get('process_rss_peak_mb', 'N/A')) if shmem_data else 'N/A'
-    fallback_sub_rss_peak = fallback_data.get('sub_rss_peak_mb', fallback_data.get('process_rss_peak_mb', 'N/A')) if fallback_data else 'N/A'
-
-    sys_ram = src.get('system_ram_mb', 'N/A')
-    gpu_util = src.get('gpu_util_pct', 'N/A')
-    gpu_freq = src.get('gpu_freq_mhz', 'N/A')
-    emc_util = src.get('emc_util_pct', 'N/A')
-    emc_freq = src.get('emc_freq_mhz', 'N/A')
-    cpu_temp = src.get('cpu_temp_c', 'N/A')
-    gpu_temp = src.get('gpu_temp_c', 'N/A')
+    pub_pss_mean = pub_data.get('pub_pss_mean_mb', src.get('pub_pss_mean_mb', 'N/A')) if pub_data else src.get('pub_pss_mean_mb', 'N/A')
+    pub_pss_peak = pub_data.get('pub_pss_peak_mb', src.get('pub_pss_peak_mb', 'N/A')) if pub_data else src.get('pub_pss_peak_mb', 'N/A')
+    shmem_sub_pss_mean = shmem_data.get('sub_pss_mean_mb', 'N/A') if shmem_data else 'N/A'
+    shmem_sub_pss_peak = shmem_data.get('sub_pss_peak_mb', 'N/A') if shmem_data else 'N/A'
+    fallback_sub_pss_mean = fallback_data.get('sub_pss_mean_mb', 'N/A') if fallback_data else 'N/A'
+    fallback_sub_pss_peak = fallback_data.get('sub_pss_peak_mb', 'N/A') if fallback_data else 'N/A'
 
     def calc_speedup(fb_str, shm_str):
         try:
@@ -218,12 +213,12 @@ def merge_and_print_csv_results(*args, **kwargs):
         'shmem_dr_p99_ms', 'fallback_dr_p99_ms',
         'shmem_dr_mean_ms', 'fallback_dr_mean_ms',
         'shmem_dr_std_ms', 'fallback_dr_std_ms',
-        'pub_cpu_mean_pct', 'pub_cpu_max_pct',
-        'shmem_sub_cpu_mean_pct', 'shmem_sub_cpu_max_pct',
-        'fallback_sub_cpu_mean_pct', 'fallback_sub_cpu_max_pct',
-        'pub_rss_peak_mb', 'shmem_sub_rss_peak_mb', 'fallback_sub_rss_peak_mb',
-        'system_ram_mb', 'gpu_util_pct', 'gpu_freq_mhz',
-        'emc_util_pct', 'emc_freq_mhz', 'cpu_temp_c', 'gpu_temp_c',
+        'pub_cpu_mean_pct', 'pub_cpu_peak_pct',
+        'shmem_sub_cpu_mean_pct', 'shmem_sub_cpu_peak_pct',
+        'fallback_sub_cpu_mean_pct', 'fallback_sub_cpu_peak_pct',
+        'pub_pss_mean_mb', 'pub_pss_peak_mb',
+        'shmem_sub_pss_mean_mb', 'shmem_sub_pss_peak_mb',
+        'fallback_sub_pss_mean_mb', 'fallback_sub_pss_peak_mb',
     ]
 
     merged_row = [
@@ -246,12 +241,12 @@ def merge_and_print_csv_results(*args, **kwargs):
         str(shmem_dr_p99), str(fallback_dr_p99),
         str(shmem_dr_mean), str(fallback_dr_mean),
         str(shmem_dr_std), str(fallback_dr_std),
-        str(pub_cpu_mean), str(pub_cpu_max),
-        str(shmem_sub_cpu_mean), str(shmem_sub_cpu_max),
-        str(fallback_sub_cpu_mean), str(fallback_sub_cpu_max),
-        str(pub_rss_peak), str(shmem_sub_rss_peak), str(fallback_sub_rss_peak),
-        str(sys_ram), str(gpu_util), str(gpu_freq),
-        str(emc_util), str(emc_freq), str(cpu_temp), str(gpu_temp),
+        str(pub_cpu_mean), str(pub_cpu_peak),
+        str(shmem_sub_cpu_mean), str(shmem_sub_cpu_peak),
+        str(fallback_sub_cpu_mean), str(fallback_sub_cpu_peak),
+        str(pub_pss_mean), str(pub_pss_peak),
+        str(shmem_sub_pss_mean), str(shmem_sub_pss_peak),
+        str(fallback_sub_pss_mean), str(fallback_sub_pss_peak),
     ]
 
     file_exists = os.path.exists(csv_file) and os.path.getsize(csv_file) > 0
@@ -334,28 +329,17 @@ def merge_and_print_csv_results(*args, **kwargs):
     fb_dr_std_str = f'{fallback_dr_std} ms' if fallback_dr_std != 'N/A' else 'N/A'
     print(f" {'  Std Dev Data-Ready':<28} | {shm_dr_std_str:<22} | {fb_dr_std_str:<22} |")
     print('-' * 105)
-    pub_cpu_str = f'{pub_cpu_mean}% (Max {pub_cpu_max}%)' if pub_cpu_mean != 'N/A' else 'N/A'
-    print(f" {'Publisher CPU Util':<28} | {pub_cpu_str:<22} | {pub_cpu_str:<22} | (Process CPU)")
-    shm_cpu_str = f'{shmem_sub_cpu_mean}% (Max {shmem_sub_cpu_max}%)' if shmem_sub_cpu_mean != 'N/A' else 'N/A'
-    fb_cpu_str = f'{fallback_sub_cpu_mean}% (Max {fallback_sub_cpu_max}%)' if fallback_sub_cpu_mean != 'N/A' else 'N/A'
-    print(f" {'Subscriber CPU Util':<28} | {shm_cpu_str:<22} | {fb_cpu_str:<22} | (Process CPU)")
-    pub_rss_str = f'{pub_rss_peak} MB' if pub_rss_peak != 'N/A' else 'N/A'
-    print(f" {'Publisher Process RSS':<28} | {pub_rss_str:<22} | {pub_rss_str:<22} | (Peak RSS)")
-    shm_rss_str = f'{shmem_sub_rss_peak} MB' if shmem_sub_rss_peak != 'N/A' else 'N/A'
-    fb_rss_str = f'{fallback_sub_rss_peak} MB' if fallback_sub_rss_peak != 'N/A' else 'N/A'
-    print(f" {'Subscriber Process RSS':<28} | {shm_rss_str:<22} | {fb_rss_str:<22} | (Peak RSS)")
-    print(f" {'System RAM Usage':<28} | {f'{sys_ram} MB':<22} | {f'{sys_ram} MB':<22} |")
-    if gpu_util != 'N/A':
-        gpu_str = f'{gpu_util}%' + (f' @ {gpu_freq} MHz' if gpu_freq != 'N/A' else '')
-        print(f" {'GPU Util / Freq':<28} | {gpu_str:<22} | {gpu_str:<22} |")
-    if emc_util != 'N/A' or emc_freq != 'N/A':
-        emc_str = f'{emc_util}%' + (f' @ {emc_freq} MHz' if emc_freq != 'N/A' else '')
-        print(f" {'EMC Memory Controller':<28} | {emc_str:<22} | {emc_str:<22} |")
-    if cpu_temp != 'N/A' or gpu_temp != 'N/A':
-        cpu_t_str = f'{cpu_temp} C' if cpu_temp != 'N/A' else 'N/A'
-        gpu_t_str = f'{gpu_temp} C' if gpu_temp != 'N/A' else 'N/A'
-        temp_str = f'CPU: {cpu_t_str} | GPU: {gpu_t_str}'
-        print(f" {'Temperatures':<28} | {temp_str:<22} | {temp_str:<22} |")
+    print(" System Resources:")
+    pub_cpu_str = f'{pub_cpu_mean}% (Peak {pub_cpu_peak}%)' if pub_cpu_mean != 'N/A' else 'N/A'
+    print(f" {'  Publisher CPU':<28} | {pub_cpu_str:<22} | {pub_cpu_str:<22} | (Process CPU)")
+    shm_cpu_str = f'{shmem_sub_cpu_mean}% (Peak {shmem_sub_cpu_peak}%)' if shmem_sub_cpu_mean != 'N/A' else 'N/A'
+    fb_cpu_str = f'{fallback_sub_cpu_mean}% (Peak {fallback_sub_cpu_peak}%)' if fallback_sub_cpu_mean != 'N/A' else 'N/A'
+    print(f" {'  Subscriber CPU':<28} | {shm_cpu_str:<22} | {fb_cpu_str:<22} | (Process CPU)")
+    pub_pss_str = f'{pub_pss_mean} MB (Peak {pub_pss_peak} MB)' if pub_pss_mean != 'N/A' else 'N/A'
+    print(f" {'  Publisher PSS':<28} | {pub_pss_str:<22} | {pub_pss_str:<22} | (/proc/self/smaps_rollup)")
+    shm_pss_str = f'{shmem_sub_pss_mean} MB (Peak {shmem_sub_pss_peak} MB)' if shmem_sub_pss_mean != 'N/A' else 'N/A'
+    fb_pss_str = f'{fallback_sub_pss_mean} MB (Peak {fallback_sub_pss_peak} MB)' if fallback_sub_pss_mean != 'N/A' else 'N/A'
+    print(f" {'  Subscriber PSS':<28} | {shm_pss_str:<22} | {fb_pss_str:<22} | (/proc/self/smaps_rollup)")
     print('=' * 105)
     print(f' Results saved to: {csv_file}\n')
 

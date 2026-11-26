@@ -43,17 +43,21 @@ ShmemImagePublisherNode::ShmemImagePublisherNode(const rclcpp::NodeOptions & opt
 
   publisher_ = create_publisher<sensor_msgs::msg::Image>(topic_name_, history_depth_);
   count_publisher_ = create_publisher<std_msgs::msg::UInt32>(topic_name_ + "/pub_count", 10);
-  pub_report_publisher_ = create_publisher<std_msgs::msg::String>(topic_name_ + "/pub_report", 10);
+  pub_report_publisher_ = create_publisher<std_msgs::msg::String>(
+    topic_name_ + "/pub_report", rclcpp::QoS(1).reliable().transient_local());
 
   const auto timer_period = std::chrono::duration<double>(1.0 / std::max(0.1, publish_rate_hz_));
   timer_ = create_wall_timer(
     std::chrono::duration_cast<std::chrono::nanoseconds>(timer_period),
     std::bind(&ShmemImagePublisherNode::publish_timer_callback, this));
 
+  double total_ram_mb = 0.0, avail_ram_mb = 0.0;
+  SystemMonitor::read_environment_ram_mb(total_ram_mb, avail_ram_mb);
   RCLCPP_INFO(
     get_logger(),
-    "ShmemImagePublisherNode initialized: topic='%s', rate=%.1f Hz, res=%dx%d, max_msgs=%d, warmup_msgs=%d, history_depth=%d",
-    topic_name_.c_str(), publish_rate_hz_, image_width_, image_height_, max_messages_, warmup_messages_, history_depth_);
+    "ShmemImagePublisherNode initialized: topic='%s', rate=%.1f Hz, res=%dx%d, max_msgs=%d, warmup_msgs=%d, history_depth=%d (online_cpus=%ld, host_ram=%.0f MB total / %.0f MB avail)",
+    topic_name_.c_str(), publish_rate_hz_, image_width_, image_height_, max_messages_, warmup_messages_, history_depth_,
+    SystemMonitor::get_online_cpu_count(), total_ram_mb, avail_ram_mb);
 }
 
 void ShmemImagePublisherNode::publish_timer_callback()
@@ -140,7 +144,7 @@ void ShmemImagePublisherNode::publish_timer_callback()
 
   if (seq == static_cast<std::size_t>(warmup_messages_ + 1)) {
     benchmark_start_time_ = steady_now;
-    proc_monitor_.start();
+    proc_monitor_.start(std::chrono::milliseconds(200), false);
   }
   if (seq > static_cast<std::size_t>(warmup_messages_)) {
     benchmark_end_time_ = steady_now;
@@ -191,25 +195,33 @@ void ShmemImagePublisherNode::write_publisher_summary(double actual_fps, std::si
   RCLCPP_INFO(get_logger(), "--------------------------------------------------------------------------");
   RCLCPP_INFO(get_logger(), " Throughput:  Target: %.1f Hz | Actual Pub: %.2f FPS | Total Published: %zu",
     publish_rate_hz_, actual_fps, total_sent);
-  RCLCPP_INFO(get_logger(), " Resources:   Publisher CPU Util: Mean: %.1f%% | Max: %.1f%%",
-    sys_summary.process_cpu_mean_pct, sys_summary.process_cpu_max_pct);
-  RCLCPP_INFO(get_logger(), "              Publisher RSS:      Mean: %.1f MB | Peak: %.1f MB",
-    sys_summary.process_rss_mean_mb, sys_summary.process_rss_peak_mb);
-  RCLCPP_INFO(get_logger(), "              System RAM Used:    %.1f MB",
-    sys_summary.system_ram_mean_mb);
+  RCLCPP_INFO(get_logger(), " System Resources:");
+  if (sys_summary.cpu_available) {
+    RCLCPP_INFO(get_logger(), "   Publisher CPU:     Mean: %.1f%% | Peak: %.1f%%",
+      sys_summary.process_cpu_mean_pct, sys_summary.process_cpu_max_pct);
+  } else {
+    RCLCPP_INFO(get_logger(), "   Publisher CPU:     N/A");
+  }
+  if (sys_summary.pss_available) {
+    RCLCPP_INFO(get_logger(), "   Publisher PSS:     Mean: %.1f MB | Peak: %.1f MB",
+      sys_summary.process_pss_mean_mb, sys_summary.process_pss_peak_mb);
+  } else {
+    RCLCPP_INFO(get_logger(), "   Publisher PSS:     N/A");
+  }
   RCLCPP_INFO(get_logger(), "==========================================================================");
 
-  // Publish report to subscriber
+  // Publish report to subscriber using reliable + transient_local QoS
   if (pub_report_publisher_) {
     std_msgs::msg::String msg;
     std::ostringstream ss;
     ss << "actual_pub_fps=" << actual_fps
        << ";total_published=" << total_sent
+       << ";pub_cpu_avail=" << (sys_summary.cpu_available ? 1 : 0)
        << ";pub_cpu_mean=" << sys_summary.process_cpu_mean_pct
        << ";pub_cpu_max=" << sys_summary.process_cpu_max_pct
-       << ";pub_rss_mean=" << sys_summary.process_rss_mean_mb
-       << ";pub_rss_peak=" << sys_summary.process_rss_peak_mb
-       << ";system_ram=" << sys_summary.system_ram_mean_mb;
+       << ";pub_pss_avail=" << (sys_summary.pss_available ? 1 : 0)
+       << ";pub_pss_mean=" << sys_summary.process_pss_mean_mb
+       << ";pub_pss_peak=" << sys_summary.process_pss_peak_mb;
     msg.data = ss.str();
     pub_report_publisher_->publish(msg);
   }
@@ -218,14 +230,21 @@ void ShmemImagePublisherNode::write_publisher_summary(double actual_fps, std::si
   if (!summary_csv_path_.empty()) {
     std::ofstream csv(summary_csv_path_);
     if (csv.is_open()) {
-      csv << "actual_pub_fps,total_published_frames,pub_cpu_mean_pct,pub_cpu_max_pct,pub_rss_mean_mb,pub_rss_peak_mb,system_ram_mb\n"
+      csv << "actual_pub_fps,total_published_frames,pub_cpu_mean_pct,pub_cpu_peak_pct,pub_pss_mean_mb,pub_pss_peak_mb\n"
           << std::fixed << std::setprecision(2) << actual_fps << ","
-          << total_sent << ","
-          << std::fixed << std::setprecision(1) << sys_summary.process_cpu_mean_pct << ","
-          << std::fixed << std::setprecision(1) << sys_summary.process_cpu_max_pct << ","
-          << std::fixed << std::setprecision(1) << sys_summary.process_rss_mean_mb << ","
-          << std::fixed << std::setprecision(1) << sys_summary.process_rss_peak_mb << ","
-          << std::fixed << std::setprecision(1) << sys_summary.system_ram_mean_mb << "\n";
+          << total_sent << ",";
+      if (sys_summary.cpu_available) {
+        csv << std::fixed << std::setprecision(1) << sys_summary.process_cpu_mean_pct << ","
+            << std::fixed << std::setprecision(1) << sys_summary.process_cpu_max_pct << ",";
+      } else {
+        csv << "N/A,N/A,";
+      }
+      if (sys_summary.pss_available) {
+        csv << std::fixed << std::setprecision(1) << sys_summary.process_pss_mean_mb << ","
+            << std::fixed << std::setprecision(1) << sys_summary.process_pss_peak_mb << "\n";
+      } else {
+        csv << "N/A,N/A\n";
+      }
     }
   }
 }

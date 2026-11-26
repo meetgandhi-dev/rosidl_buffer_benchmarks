@@ -111,33 +111,40 @@ def print_csv_results(*args, **kwargs):
                     print(f" {'Outliers (> 3-sigma)':<26} | {r.get('outliers_3sigma_count','')} frames")
                 print('-' * 105)
                 pub_cpu_mean = r.get('pub_cpu_mean_pct', 'N/A')
-                pub_cpu_max = r.get('pub_cpu_max_pct', 'N/A')
-                sub_cpu_mean = r.get('sub_cpu_mean_pct', r.get('cpu_util_mean_pct', 'N/A'))
-                sub_cpu_max = r.get('sub_cpu_max_pct', r.get('cpu_util_max_pct', 'N/A'))
-                pub_rss_peak = r.get('pub_rss_peak_mb', 'N/A')
-                sub_rss_peak = r.get('sub_rss_peak_mb', r.get('process_rss_peak_mb', 'N/A'))
-                sys_ram = r.get('system_ram_mb', 'N/A')
+                pub_cpu_peak = r.get('pub_cpu_peak_pct', 'N/A')
+                sub_cpu_mean = r.get('sub_cpu_mean_pct', 'N/A')
+                sub_cpu_peak = r.get('sub_cpu_peak_pct', 'N/A')
+                pub_pss_mean = r.get('pub_pss_mean_mb', 'N/A')
+                pub_pss_peak = r.get('pub_pss_peak_mb', 'N/A')
+                sub_pss_mean = r.get('sub_pss_mean_mb', 'N/A')
+                sub_pss_peak = r.get('sub_pss_peak_mb', 'N/A')
                 gpu_util = r.get('gpu_util_pct', 'N/A')
                 gpu_freq = r.get('gpu_freq_mhz', 'N/A')
                 emc_util = r.get('emc_util_pct', 'N/A')
                 emc_freq = r.get('emc_freq_mhz', 'N/A')
-                cpu_temp = r.get('cpu_temp_c', 'N/A')
-                gpu_temp = r.get('gpu_temp_c', 'N/A')
-                print(f" {'Publisher CPU Util':<26} | Mean: {pub_cpu_mean}% | Max: {pub_cpu_max}%")
-                print(f" {'Subscriber CPU Util':<26} | Mean: {sub_cpu_mean}% | Max: {sub_cpu_max}%")
-                print(f" {'Process RSS Peak':<26} | Pub: {pub_rss_peak} MB | Sub: {sub_rss_peak} MB")
-                print(f" {'System RAM Used':<26} | {sys_ram} MB")
+                print(" System Resources:")
+                if pub_cpu_mean != 'N/A':
+                    print(f" {'  Publisher CPU':<26} | Mean: {pub_cpu_mean}% | Peak: {pub_cpu_peak}%")
+                else:
+                    print(f" {'  Publisher CPU':<26} | N/A")
+                if sub_cpu_mean != 'N/A':
+                    print(f" {'  Subscriber CPU':<26} | Mean: {sub_cpu_mean}% | Peak: {sub_cpu_peak}%")
+                else:
+                    print(f" {'  Subscriber CPU':<26} | N/A")
+                if pub_pss_mean != 'N/A':
+                    print(f" {'  Publisher PSS':<26} | Mean: {pub_pss_mean} MB | Peak: {pub_pss_peak} MB")
+                else:
+                    print(f" {'  Publisher PSS':<26} | N/A")
+                if sub_pss_mean != 'N/A':
+                    print(f" {'  Subscriber PSS':<26} | Mean: {sub_pss_mean} MB | Peak: {sub_pss_peak} MB")
+                else:
+                    print(f" {'  Subscriber PSS':<26} | N/A")
                 if gpu_util != 'N/A':
                     gpu_str = f'{gpu_util}%' + (f' @ {gpu_freq} MHz' if gpu_freq != 'N/A' else '')
-                    print(f" {'GPU Util / Freq':<26} | {gpu_str}")
+                    print(f" {'  GPU Util / Freq':<26} | {gpu_str}")
                 if emc_util != 'N/A' or emc_freq != 'N/A':
                     emc_str = f'{emc_util}%' + (f' @ {emc_freq} MHz' if emc_freq != 'N/A' else '')
-                    print(f" {'EMC Memory Controller':<26} | {emc_str}")
-                if cpu_temp != 'N/A' or gpu_temp != 'N/A':
-                    cpu_t_str = f'{cpu_temp} C' if cpu_temp != 'N/A' else 'N/A'
-                    gpu_t_str = f'{gpu_temp} C' if gpu_temp != 'N/A' else 'N/A'
-                    temp_str = f'CPU: {cpu_t_str} | GPU: {gpu_t_str}'
-                    print(f" {'Temperatures':<26} | {temp_str}")
+                    print(f" {'  EMC Memory Controller':<26} | {emc_str}")
                 print('=' * 105)
                 print(f' Results saved to: {csv_file}\n')
         except OSError:

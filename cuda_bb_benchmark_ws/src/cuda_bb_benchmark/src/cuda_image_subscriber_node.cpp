@@ -84,7 +84,7 @@ CudaImageSubscriberNode::CudaImageSubscriberNode(const rclcpp::NodeOptions & opt
     sub_options);
 
   pub_report_sub_ = create_subscription<std_msgs::msg::String>(
-    topic_name_ + "/pub_report", 10,
+    topic_name_ + "/pub_report", rclcpp::QoS(1).reliable().transient_local(),
     std::bind(&CudaImageSubscriberNode::pub_report_callback, this, std::placeholders::_1));
 
   if (publish_diagnostics_) {
@@ -100,23 +100,13 @@ CudaImageSubscriberNode::CudaImageSubscriberNode(const rclcpp::NodeOptions & opt
     watchdog_timer_ = create_wall_timer(
       std::chrono::milliseconds(500),
       [this]() {
-        if (!latencies_ms_.empty() && max_messages_ > 0) {
+        if (!callback_latencies_ms_.empty() && max_messages_ > 0 && !summary_written_) {
           if (subscription_->get_publisher_count() == 0u) {
             RCLCPP_INFO(
               get_logger(),
               "Publisher disconnected. Finalizing subscriber with %zu measured frames (%zu total received).",
-              latencies_ms_.size(), received_count_);
-            write_summary_report(last_backend_, last_width_, last_height_);
-            if (auto_exit_) {
-              watchdog_timer_->cancel();
-              if (rclcpp::ok()) {
-                rclcpp::shutdown();
-              }
-              std::thread([]() {
-                std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-                _exit(0);
-              }).detach();
-            }
+              callback_latencies_ms_.size(), received_count_);
+            finalize_benchmark();
           }
         }
       });
@@ -163,14 +153,49 @@ void CudaImageSubscriberNode::pub_report_callback(std_msgs::msg::String::ConstSh
       try {
         if (key == "actual_pub_fps") pub_fps_ = std::stod(val);
         else if (key == "total_published") pub_total_frames_ = std::stoull(val);
+        else if (key == "pub_cpu_avail") pub_cpu_available_ = (std::stoi(val) != 0);
         else if (key == "pub_cpu_mean") pub_cpu_mean_pct_ = std::stod(val);
         else if (key == "pub_cpu_max") pub_cpu_max_pct_ = std::stod(val);
-        else if (key == "pub_rss_mean") pub_rss_mean_mb_ = std::stod(val);
-        else if (key == "pub_rss_peak") pub_rss_peak_mb_ = std::stod(val);
+        else if (key == "pub_pss_avail") pub_pss_available_ = (std::stoi(val) != 0);
+        else if (key == "pub_pss_mean") pub_pss_mean_mb_ = std::stod(val);
+        else if (key == "pub_pss_peak") pub_pss_peak_mb_ = std::stod(val);
       } catch (...) {}
     }
   }
   pub_report_received_ = true;
+  if (waiting_for_pub_report_ && !summary_written_) {
+    if (report_wait_timer_) {
+      report_wait_timer_->cancel();
+    }
+    finalize_benchmark();
+  }
+}
+
+void CudaImageSubscriberNode::finalize_benchmark()
+{
+  if (summary_written_) {
+    return;
+  }
+  if (report_wait_timer_) {
+    report_wait_timer_->cancel();
+  }
+  if (watchdog_timer_) {
+    watchdog_timer_->cancel();
+  }
+  waiting_for_pub_report_ = false;
+  write_summary_report(last_backend_, last_width_, last_height_);
+
+  if (auto_exit_) {
+    RCLCPP_INFO(get_logger(), "Auto-exit triggered. Shutting down subscriber.");
+    if (rclcpp::ok()) {
+      rclcpp::shutdown();
+    }
+    // Safety watchdog: ensure process terminates cleanly and does not hang on background threads
+    std::thread([]() {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+      _exit(0);
+    }).detach();
+  }
 }
 
 void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstSharedPtr msg)
@@ -440,7 +465,7 @@ void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShare
       first_bench_seq_ = seq;
       sub_first_recv_time_ = cb_entry_time;
       pub_first_stamp_ns_ = pub_steady_ns;
-      sys_monitor_.start();
+      sys_monitor_.start(std::chrono::milliseconds(200), true);
     }
     last_bench_seq_ = seq;
     sub_last_recv_time_ = cb_entry_time;
@@ -500,22 +525,27 @@ void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShare
      static_cast<int>(received_count_) >= total_expected ||
      seq >= static_cast<std::size_t>(total_expected)));
 
-  if (is_complete) {
-    write_summary_report(backend, msg->width, msg->height);
+  if (is_complete && !summary_written_ && !waiting_for_pub_report_) {
+    // End subscriber resource measurement window at the last measured frame
+    sys_monitor_.stop();
 
-    if (auto_exit_) {
-      if (watchdog_timer_) {
-        watchdog_timer_->cancel();
-      }
-      RCLCPP_INFO(get_logger(), "Auto-exit triggered. Shutting down subscriber.");
-      if (rclcpp::ok()) {
-        rclcpp::shutdown();
-      }
-      // Safety watchdog: ensure process terminates cleanly and does not hang on background threads
-      std::thread([]() {
-        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-        _exit(0);
-      }).detach();
+    if (pub_report_received_) {
+      finalize_benchmark();
+    } else {
+      waiting_for_pub_report_ = true;
+      report_wait_timer_ = create_wall_timer(
+        std::chrono::milliseconds(2000),
+        [this]() {
+          if (report_wait_timer_) {
+            report_wait_timer_->cancel();
+          }
+          if (!summary_written_) {
+            RCLCPP_WARN(
+              get_logger(),
+              "Timed out waiting for publisher resource report after 2000 ms; finalizing with publisher metrics as N/A.");
+            finalize_benchmark();
+          }
+        });
     }
   }
 }
@@ -646,24 +676,30 @@ void CudaImageSubscriberNode::write_summary_report(
   RCLCPP_INFO(get_logger(), "     P50:  %.3f | P95: %.3f | P99: %.3f | Mean: %.3f | StdDev: %.3f",
     op_stats.p50_ms, op_stats.p95_ms, op_stats.p99_ms, op_stats.mean_ms, op_stats.std_dev_ms);
   RCLCPP_INFO(get_logger(), " System Resources:");
-  if (pub_report_received_) {
-    RCLCPP_INFO(get_logger(), "   Publisher CPU:     Mean: %.1f%% | Max: %.1f%%",
+  if (pub_report_received_ && pub_cpu_available_) {
+    RCLCPP_INFO(get_logger(), "   Publisher CPU:     Mean: %.1f%% | Peak: %.1f%%",
       pub_cpu_mean_pct_, pub_cpu_max_pct_);
   } else {
     RCLCPP_INFO(get_logger(), "   Publisher CPU:     N/A");
   }
-  RCLCPP_INFO(get_logger(), "   Subscriber CPU:    Mean: %.1f%% | Max: %.1f%%",
-    sys_summary.process_cpu_mean_pct, sys_summary.process_cpu_max_pct);
-  if (pub_report_received_) {
-    RCLCPP_INFO(get_logger(), "   Publisher RSS:     Mean: %.1f MB | Peak: %.1f MB",
-      pub_rss_mean_mb_, pub_rss_peak_mb_);
+  if (sys_summary.cpu_available) {
+    RCLCPP_INFO(get_logger(), "   Subscriber CPU:    Mean: %.1f%% | Peak: %.1f%%",
+      sys_summary.process_cpu_mean_pct, sys_summary.process_cpu_max_pct);
   } else {
-    RCLCPP_INFO(get_logger(), "   Publisher RSS:     N/A");
+    RCLCPP_INFO(get_logger(), "   Subscriber CPU:    N/A");
   }
-  RCLCPP_INFO(get_logger(), "   Subscriber RSS:    Mean: %.1f MB | Peak: %.1f MB",
-    sys_summary.process_rss_mean_mb, sys_summary.process_rss_peak_mb);
-  RCLCPP_INFO(get_logger(), "   System RAM Used:   %.1f MB",
-    sys_summary.system_ram_mean_mb);
+  if (pub_report_received_ && pub_pss_available_) {
+    RCLCPP_INFO(get_logger(), "   Publisher PSS:     Mean: %.1f MB | Peak: %.1f MB",
+      pub_pss_mean_mb_, pub_pss_peak_mb_);
+  } else {
+    RCLCPP_INFO(get_logger(), "   Publisher PSS:     N/A");
+  }
+  if (sys_summary.pss_available) {
+    RCLCPP_INFO(get_logger(), "   Subscriber PSS:    Mean: %.1f MB | Peak: %.1f MB",
+      sys_summary.process_pss_mean_mb, sys_summary.process_pss_peak_mb);
+  } else {
+    RCLCPP_INFO(get_logger(), "   Subscriber PSS:    N/A");
+  }
   if (sys_summary.gpu_available) {
     if (sys_summary.gpu_freq_available) {
       RCLCPP_INFO(get_logger(), "   GPU Util / Freq:   %.1f%% | %.0f MHz",
@@ -672,24 +708,10 @@ void CudaImageSubscriberNode::write_summary_report(
       RCLCPP_INFO(get_logger(), "   GPU Utilization:   %.1f%%",
         sys_summary.gpu_util_mean_pct);
     }
-  } else {
-    RCLCPP_INFO(get_logger(), "   GPU Utilization:   N/A");
   }
   if (sys_summary.emc_available) {
     RCLCPP_INFO(get_logger(), "   EMC Memory Ctrl:   %.1f%% | %.0f MHz",
       sys_summary.emc_util_mean_pct, sys_summary.emc_freq_mean_mhz);
-  } else {
-    RCLCPP_INFO(get_logger(), "   EMC Memory Ctrl:   N/A");
-  }
-  if (sys_summary.cpu_temp_available || sys_summary.gpu_temp_available) {
-    std::string cpu_t = sys_summary.cpu_temp_available ?
-      (std::to_string(static_cast<int>(std::round(sys_summary.cpu_temp_mean_c))) + " C") : "N/A";
-    std::string gpu_t = sys_summary.gpu_temp_available ?
-      (std::to_string(static_cast<int>(std::round(sys_summary.gpu_temp_mean_c))) + " C") : "N/A";
-    RCLCPP_INFO(get_logger(), "   Temperatures:      CPU: %s | GPU: %s",
-      cpu_t.c_str(), gpu_t.c_str());
-  } else {
-    RCLCPP_INFO(get_logger(), "   Temperatures:      CPU: N/A | GPU: N/A");
   }
   RCLCPP_INFO(get_logger(), "==========================================================================");
 
@@ -714,9 +736,9 @@ void CudaImageSubscriberNode::write_summary_report(
             << "cb_mean_latency_ms,cb_min_latency_ms,cb_p50_latency_ms,cb_p95_latency_ms,cb_p99_latency_ms,cb_max_latency_ms,cb_std_dev_ms,cb_outliers_3sigma_count,"
             << "br_mean_latency_ms,br_min_latency_ms,br_p50_latency_ms,br_p95_latency_ms,br_p99_latency_ms,br_max_latency_ms,br_std_dev_ms,br_outliers_3sigma_count,"
             << "device_op_mean_ms,device_op_p50_ms,device_op_p95_ms,device_op_p99_ms,device_op_std_dev_ms,"
-            << "pub_cpu_mean_pct,pub_cpu_max_pct,sub_cpu_mean_pct,sub_cpu_max_pct,"
-            << "pub_rss_peak_mb,sub_rss_peak_mb,system_ram_mb,"
-            << "gpu_util_pct,gpu_freq_mhz,emc_util_pct,emc_freq_mhz,cpu_temp_c,gpu_temp_c\n";
+            << "pub_cpu_mean_pct,pub_cpu_peak_pct,sub_cpu_mean_pct,sub_cpu_peak_pct,"
+            << "pub_pss_mean_mb,pub_pss_peak_mb,sub_pss_mean_mb,sub_pss_peak_mb,"
+            << "gpu_util_pct,gpu_freq_mhz,emc_util_pct,emc_freq_mhz\n";
       }
       csv << backend << ","
           << size_bytes << ","
@@ -752,24 +774,33 @@ void CudaImageSubscriberNode::write_summary_report(
           << std::fixed << std::setprecision(3) << op_stats.p99_ms << ","
           << std::fixed << std::setprecision(3) << op_stats.std_dev_ms << ",";
 
-      if (pub_report_received_) {
+      if (pub_report_received_ && pub_cpu_available_) {
         csv << std::fixed << std::setprecision(1) << pub_cpu_mean_pct_ << ","
             << std::fixed << std::setprecision(1) << pub_cpu_max_pct_ << ",";
       } else {
         csv << "N/A,N/A,";
       }
 
-      csv << std::fixed << std::setprecision(1) << sys_summary.process_cpu_mean_pct << ","
-          << std::fixed << std::setprecision(1) << sys_summary.process_cpu_max_pct << ",";
-
-      if (pub_report_received_) {
-        csv << std::fixed << std::setprecision(1) << pub_rss_peak_mb_ << ",";
+      if (sys_summary.cpu_available) {
+        csv << std::fixed << std::setprecision(1) << sys_summary.process_cpu_mean_pct << ","
+            << std::fixed << std::setprecision(1) << sys_summary.process_cpu_max_pct << ",";
       } else {
-        csv << "N/A,";
+        csv << "N/A,N/A,";
       }
 
-      csv << std::fixed << std::setprecision(1) << sys_summary.process_rss_peak_mb << ","
-          << std::fixed << std::setprecision(1) << sys_summary.system_ram_mean_mb << ",";
+      if (pub_report_received_ && pub_pss_available_) {
+        csv << std::fixed << std::setprecision(1) << pub_pss_mean_mb_ << ","
+            << std::fixed << std::setprecision(1) << pub_pss_peak_mb_ << ",";
+      } else {
+        csv << "N/A,N/A,";
+      }
+
+      if (sys_summary.pss_available) {
+        csv << std::fixed << std::setprecision(1) << sys_summary.process_pss_mean_mb << ","
+            << std::fixed << std::setprecision(1) << sys_summary.process_pss_peak_mb << ",";
+      } else {
+        csv << "N/A,N/A,";
+      }
 
       if (sys_summary.gpu_available) {
         csv << std::fixed << std::setprecision(1) << sys_summary.gpu_util_mean_pct << ",";
@@ -785,21 +816,9 @@ void CudaImageSubscriberNode::write_summary_report(
 
       if (sys_summary.emc_available) {
         csv << std::fixed << std::setprecision(1) << sys_summary.emc_util_mean_pct << ","
-            << std::fixed << std::setprecision(0) << sys_summary.emc_freq_mean_mhz << ",";
+            << std::fixed << std::setprecision(0) << sys_summary.emc_freq_mean_mhz << "\n";
       } else {
-        csv << "N/A,N/A,";
-      }
-
-      if (sys_summary.cpu_temp_available) {
-        csv << std::fixed << std::setprecision(1) << sys_summary.cpu_temp_mean_c << ",";
-      } else {
-        csv << "N/A,";
-      }
-
-      if (sys_summary.gpu_temp_available) {
-        csv << std::fixed << std::setprecision(1) << sys_summary.gpu_temp_mean_c << "\n";
-      } else {
-        csv << "N/A\n";
+        csv << "N/A,N/A\n";
       }
     }
   }

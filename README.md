@@ -77,14 +77,13 @@ For CUDA benchmarks (`cuda_bb_benchmark`), latency is decomposed to reflect GPU 
 
 ### 3.5 System Resource Monitoring
 
-Resource telemetry runs on an asynchronous non-blocking thread (`SystemMonitor`) sampling process and system metrics every 200 ms:
-- **Publisher CPU Utilization**: Dedicated process-level CPU % (`utime + stime` ticks delta divided by system ticks, scaled across available CPU cores; reports mean and peak).
-- **Subscriber CPU Utilization**: Dedicated process-level CPU % for the subscriber process (mean and peak).
-- **Publisher Process RSS**: Peak resident memory (`VmHWM` from `/proc/self/status`) consumed by the publisher process.
-- **Subscriber Process RSS**: Peak resident memory (`VmHWM` from `/proc/self/status`) consumed by the subscriber process (reflecting buffer pool mapping vs heap duplication).
-- **System RAM Usage**: Overall host memory pressure (`MemTotal - MemAvailable` from `/proc/meminfo`).
-- **GPU Utilization**: Where reliable monitoring is available (`nvidia-smi`), records GPU core utilization (%); otherwise reports `N/A`.
-- **Strict Telemetry Integrity**: Unsupported or unavailable metrics are recorded as `N/A`—unreliable or synthetic telemetry is never injected just to populate CSV columns.
+Resource telemetry runs on an asynchronous non-blocking background thread (`SystemMonitor`) outside the publish and subscribe callbacks, started at the beginning of the measured benchmark window (excluding warm-up frames) and stopped when the measured window ends:
+- **Publisher & Subscriber CPU Utilization**: Dedicated process-level CPU % sampled every 200 ms using `/proc/self/stat` (`utime + stime`) and monotonic `std::chrono::steady_clock` elapsed wall-clock time:
+  $$\text{CPU\%} = \frac{\text{process CPU time}}{\text{elapsed wall-clock time}} \times \frac{100}{\text{online logical CPU count}}$$
+  This expresses CPU utilization as a percentage of total host CPU capacity. Reported **Peak** is the maximum sampled CPU utilization over the benchmark interval (not an instantaneous hardware peak). Online logical CPU count and host RAM are logged once at startup as environment metadata.
+- **Publisher & Subscriber Proportional Set Size (PSS)**: Sampled approximately once per second from `/proc/self/smaps_rollup` (`Pss:` field, converted to MB). PSS proportionally divides shared-memory pages across mapping processes instead of double-counting them like RSS. If `smaps_rollup` is unreadable, `N/A` is reported.
+- **Optional GPU Telemetry (CUDA benchmarks only)**: Where reliable NVIDIA telemetry is available (`tegrastats`, sysfs, or `nvidia-smi`), records optional GPU and EMC utilization; otherwise omitted or `N/A`.
+- **Strict Telemetry Integrity**: Unsupported or unavailable metrics are recorded as `N/A`—unreliable or synthetic telemetry is never substituted. Temperature and continuous host-wide RAM monitoring are intentionally omitted from benchmark summaries.
 
 ---
 
@@ -362,19 +361,12 @@ All benchmark CSVs and logs are saved under [`results/`](results/).
 | `shmem_max_ms` / `fallback_max_ms` | Maximum frame latency recorded (ms) |
 | `shmem_std_ms` / `fallback_std_ms` | Latency standard deviation / jitter (ms) |
 | `shmem_outliers` / `fallback_outliers` | Number of 3-sigma outliers (`> mean + 3 * std_dev`) (never discarded) |
-| `pub_cpu_mean_pct` / `pub_cpu_max_pct` | Publisher process CPU utilization (%) (mean / peak) |
-| `shmem_sub_cpu_mean_pct` / `shmem_sub_cpu_max_pct` | SHMEM subscriber process CPU utilization (%) (mean / peak) |
-| `fallback_sub_cpu_mean_pct` / `fallback_sub_cpu_max_pct` | Fallback subscriber process CPU utilization (%) (mean / peak) |
-| `pub_rss_peak_mb` | Publisher process peak resident memory (`VmHWM`) in MB |
-| `shmem_sub_rss_peak_mb` | SHMEM subscriber process peak resident memory (`VmHWM`) in MB |
-| `fallback_sub_rss_peak_mb` | Fallback subscriber process peak resident memory (`VmHWM`) in MB |
-| `system_ram_mb` | Host system RAM used (MB) |
-| `gpu_util_pct` | GPU core utilization (%) (from Jetson `tegrastats` `GR3D_FREQ`, sysfs, or `nvidia-smi`) |
-| `gpu_freq_mhz` | GPU core frequency in MHz (from Jetson `tegrastats` `GR3D_FREQ` or devfreq) |
-| `emc_util_pct` | EMC memory controller utilization (%) (from Jetson `tegrastats` `EMC_FREQ`) |
-| `emc_freq_mhz` | EMC memory controller bus clock in MHz (from Jetson `tegrastats` `EMC_FREQ` or devfreq) |
-| `cpu_temp_c` | CPU temperature in °C (from Jetson `tegrastats` or thermal zones) |
-| `gpu_temp_c` | GPU temperature in °C (from Jetson `tegrastats` or thermal zones) |
+| `pub_cpu_mean_pct` / `pub_cpu_peak_pct` | Publisher process CPU utilization (%) (mean / peak sampled) |
+| `shmem_sub_cpu_mean_pct` / `shmem_sub_cpu_peak_pct` | SHMEM subscriber process CPU utilization (%) (mean / peak sampled) |
+| `fallback_sub_cpu_mean_pct` / `fallback_sub_cpu_peak_pct` | Fallback subscriber process CPU utilization (%) (mean / peak sampled) |
+| `pub_pss_mean_mb` / `pub_pss_peak_mb` | Publisher process Proportional Set Size (`Pss:` from `/proc/self/smaps_rollup`) in MB (mean / peak) |
+| `shmem_sub_pss_mean_mb` / `shmem_sub_pss_peak_mb` | SHMEM subscriber process PSS in MB (mean / peak) |
+| `fallback_sub_pss_mean_mb` / `fallback_sub_pss_peak_mb` | Fallback subscriber process PSS in MB (mean / peak) |
 
 #### CUDA Comparison (`cuda_fallback_two_subs.launch.py`)
 
@@ -390,20 +382,19 @@ All benchmark CSVs and logs are saved under [`results/`](results/).
 | `cuda_dropped_frames` / `fallback_dropped_frames` | Dropped frames detected |
 | `cuda_loss_pct` / `fallback_loss_pct` | Frame loss percentage |
 | `cuda_cb_*` | **Callback Entry Latency**: P50, P95, P99, Mean, Min, Max, StdDev, Outliers (`t_cb_entry - t_pub`) |
-| `cuda_br_*` | **Buffer-Ready Latency**: P50, P95, P99, Mean, Min, Max, StdDev, Outliers after `cudaStreamSynchronize` |
-| `fallback_*` | Fallback CPU subscriber latencies |
-| `p50_speedup` / `p99_speedup` / `mean_speedup` | Speedup ratios comparing Fallback latency to CUDA Buffer-Ready latency |
-| `pub_cpu_mean_pct` / `pub_cpu_max_pct` | Publisher process CPU utilization (%) (mean / peak) |
-| `cuda_sub_cpu_mean_pct` / `cuda_sub_cpu_max_pct` | CUDA subscriber process CPU utilization (%) (mean / peak) |
-| `fallback_sub_cpu_mean_pct` / `fallback_sub_cpu_max_pct` | Fallback subscriber process CPU utilization (%) (mean / peak) |
-| `pub_rss_peak_mb` / `cuda_sub_rss_peak_mb` / `fallback_sub_rss_peak_mb` | Peak process resident memory (`VmHWM`) in MB |
-| `system_ram_mb` | Host system RAM used (MB) |
-| `gpu_util_pct` | GPU core utilization (%) (from Jetson `tegrastats` `GR3D_FREQ`, sysfs, or `nvidia-smi`) |
-| `gpu_freq_mhz` | GPU core frequency in MHz (from Jetson `tegrastats` `GR3D_FREQ` or devfreq) |
-| `emc_util_pct` | EMC memory controller utilization (%) (from Jetson `tegrastats` `EMC_FREQ`) |
-| `emc_freq_mhz` | EMC memory controller bus clock in MHz (from Jetson `tegrastats` `EMC_FREQ` or devfreq) |
-| `cpu_temp_c` | CPU temperature in °C (from Jetson `tegrastats` or thermal zones) |
-| `gpu_temp_c` | GPU temperature in °C (from Jetson `tegrastats` or thermal zones) |
+| `cuda_br_*` | **GPU-Ready Latency**: P50, P95, P99, Mean, Min, Max, StdDev, Outliers after stream sync |
+| `fallback_*` | Fallback CPU->GPU H2D subscriber latencies |
+| `p50_speedup` / `p99_speedup` / `mean_speedup` | Speedup ratios comparing Fallback GPU-Ready latency to CUDA GPU-Ready latency |
+| `pub_cpu_mean_pct` / `pub_cpu_peak_pct` | Publisher process CPU utilization (%) (mean / peak sampled) |
+| `cuda_sub_cpu_mean_pct` / `cuda_sub_cpu_peak_pct` | CUDA subscriber process CPU utilization (%) (mean / peak sampled) |
+| `fallback_sub_cpu_mean_pct` / `fallback_sub_cpu_peak_pct` | Fallback subscriber process CPU utilization (%) (mean / peak sampled) |
+| `pub_pss_mean_mb` / `pub_pss_peak_mb` | Publisher process PSS in MB (mean / peak) |
+| `cuda_sub_pss_mean_mb` / `cuda_sub_pss_peak_mb` | CUDA subscriber process PSS in MB (mean / peak) |
+| `fallback_sub_pss_mean_mb` / `fallback_sub_pss_peak_mb` | Fallback subscriber process PSS in MB (mean / peak) |
+| `gpu_util_pct` | Optional GPU core utilization (%) (from Jetson `tegrastats` `GR3D_FREQ`, sysfs, or `nvidia-smi`) |
+| `gpu_freq_mhz` | Optional GPU core frequency in MHz (from Jetson `tegrastats` `GR3D_FREQ` or devfreq) |
+| `emc_util_pct` | Optional EMC memory controller utilization (%) (from Jetson `tegrastats` `EMC_FREQ`) |
+| `emc_freq_mhz` | Optional EMC memory controller bus clock in MHz (from Jetson `tegrastats` `EMC_FREQ` or devfreq) |
 
 ### 6.2 Single-Mode and Intra-Process CSV Schema
 

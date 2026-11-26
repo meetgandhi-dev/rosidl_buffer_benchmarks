@@ -179,24 +179,24 @@ def merge_and_print_csv_results(*args, **kwargs):
 
     # Resource telemetry
     pub_cpu_mean = pub_data.get('pub_cpu_mean_pct', src.get('pub_cpu_mean_pct', 'N/A')) if pub_data else src.get('pub_cpu_mean_pct', 'N/A')
-    pub_cpu_max = pub_data.get('pub_cpu_max_pct', src.get('pub_cpu_max_pct', 'N/A')) if pub_data else src.get('pub_cpu_max_pct', 'N/A')
+    pub_cpu_peak = pub_data.get('pub_cpu_peak_pct', src.get('pub_cpu_peak_pct', 'N/A')) if pub_data else src.get('pub_cpu_peak_pct', 'N/A')
 
-    cuda_sub_cpu_mean = cuda_data.get('sub_cpu_mean_pct', cuda_data.get('cpu_util_mean_pct', 'N/A')) if cuda_data else 'N/A'
-    cuda_sub_cpu_max = cuda_data.get('sub_cpu_max_pct', cuda_data.get('cpu_util_max_pct', 'N/A')) if cuda_data else 'N/A'
-    fallback_sub_cpu_mean = fallback_data.get('sub_cpu_mean_pct', fallback_data.get('cpu_util_mean_pct', 'N/A')) if fallback_data else 'N/A'
-    fallback_sub_cpu_max = fallback_data.get('sub_cpu_max_pct', fallback_data.get('cpu_util_max_pct', 'N/A')) if fallback_data else 'N/A'
+    cuda_sub_cpu_mean = cuda_data.get('sub_cpu_mean_pct', 'N/A') if cuda_data else 'N/A'
+    cuda_sub_cpu_peak = cuda_data.get('sub_cpu_peak_pct', 'N/A') if cuda_data else 'N/A'
+    fallback_sub_cpu_mean = fallback_data.get('sub_cpu_mean_pct', 'N/A') if fallback_data else 'N/A'
+    fallback_sub_cpu_peak = fallback_data.get('sub_cpu_peak_pct', 'N/A') if fallback_data else 'N/A'
 
-    pub_rss_peak = pub_data.get('pub_rss_peak_mb', src.get('pub_rss_peak_mb', 'N/A')) if pub_data else src.get('pub_rss_peak_mb', 'N/A')
-    cuda_sub_rss_peak = cuda_data.get('sub_rss_peak_mb', cuda_data.get('process_rss_peak_mb', 'N/A')) if cuda_data else 'N/A'
-    fallback_sub_rss_peak = fallback_data.get('sub_rss_peak_mb', fallback_data.get('process_rss_peak_mb', 'N/A')) if fallback_data else 'N/A'
+    pub_pss_mean = pub_data.get('pub_pss_mean_mb', src.get('pub_pss_mean_mb', 'N/A')) if pub_data else src.get('pub_pss_mean_mb', 'N/A')
+    pub_pss_peak = pub_data.get('pub_pss_peak_mb', src.get('pub_pss_peak_mb', 'N/A')) if pub_data else src.get('pub_pss_peak_mb', 'N/A')
+    cuda_sub_pss_mean = cuda_data.get('sub_pss_mean_mb', 'N/A') if cuda_data else 'N/A'
+    cuda_sub_pss_peak = cuda_data.get('sub_pss_peak_mb', 'N/A') if cuda_data else 'N/A'
+    fallback_sub_pss_mean = fallback_data.get('sub_pss_mean_mb', 'N/A') if fallback_data else 'N/A'
+    fallback_sub_pss_peak = fallback_data.get('sub_pss_peak_mb', 'N/A') if fallback_data else 'N/A'
 
-    sys_ram = src.get('system_ram_mb', 'N/A')
     gpu_util = src.get('gpu_util_pct', 'N/A')
     gpu_freq = src.get('gpu_freq_mhz', 'N/A')
     emc_util = src.get('emc_util_pct', 'N/A')
     emc_freq = src.get('emc_freq_mhz', 'N/A')
-    cpu_temp = src.get('cpu_temp_c', 'N/A')
-    gpu_temp = src.get('gpu_temp_c', 'N/A')
 
     merged_header = [
         'resolution', 'size_bytes', 'target_hz', 'actual_pub_fps',
@@ -214,12 +214,13 @@ def merge_and_print_csv_results(*args, **kwargs):
         'cuda_br_max_ms', 'fallback_max_ms',
         'cuda_br_std_ms', 'fallback_std_ms',
         'cuda_br_outliers', 'fallback_outliers',
-        'pub_cpu_mean_pct', 'pub_cpu_max_pct',
-        'cuda_sub_cpu_mean_pct', 'cuda_sub_cpu_max_pct',
-        'fallback_sub_cpu_mean_pct', 'fallback_sub_cpu_max_pct',
-        'pub_rss_peak_mb', 'cuda_sub_rss_peak_mb', 'fallback_sub_rss_peak_mb',
-        'system_ram_mb', 'gpu_util_pct', 'gpu_freq_mhz',
-        'emc_util_pct', 'emc_freq_mhz', 'cpu_temp_c', 'gpu_temp_c',
+        'pub_cpu_mean_pct', 'pub_cpu_peak_pct',
+        'cuda_sub_cpu_mean_pct', 'cuda_sub_cpu_peak_pct',
+        'fallback_sub_cpu_mean_pct', 'fallback_sub_cpu_peak_pct',
+        'pub_pss_mean_mb', 'pub_pss_peak_mb',
+        'cuda_sub_pss_mean_mb', 'cuda_sub_pss_peak_mb',
+        'fallback_sub_pss_mean_mb', 'fallback_sub_pss_peak_mb',
+        'gpu_util_pct', 'gpu_freq_mhz', 'emc_util_pct', 'emc_freq_mhz',
     ]
 
     merged_row = [
@@ -238,12 +239,13 @@ def merge_and_print_csv_results(*args, **kwargs):
         str(cuda_br_max), str(fallback_max),
         str(cuda_br_std), str(fallback_std),
         str(cuda_br_outliers), str(fallback_outliers),
-        str(pub_cpu_mean), str(pub_cpu_max),
-        str(cuda_sub_cpu_mean), str(cuda_sub_cpu_max),
-        str(fallback_sub_cpu_mean), str(fallback_sub_cpu_max),
-        str(pub_rss_peak), str(cuda_sub_rss_peak), str(fallback_sub_rss_peak),
-        str(sys_ram), str(gpu_util), str(gpu_freq),
-        str(emc_util), str(emc_freq), str(cpu_temp), str(gpu_temp),
+        str(pub_cpu_mean), str(pub_cpu_peak),
+        str(cuda_sub_cpu_mean), str(cuda_sub_cpu_peak),
+        str(fallback_sub_cpu_mean), str(fallback_sub_cpu_peak),
+        str(pub_pss_mean), str(pub_pss_peak),
+        str(cuda_sub_pss_mean), str(cuda_sub_pss_peak),
+        str(fallback_sub_pss_mean), str(fallback_sub_pss_peak),
+        str(gpu_util), str(gpu_freq), str(emc_util), str(emc_freq),
     ]
 
     file_exists = os.path.exists(csv_file) and os.path.getsize(csv_file) > 0
@@ -326,28 +328,23 @@ def merge_and_print_csv_results(*args, **kwargs):
     fb_op_str = f'{fallback_device_op} ms' if fallback_device_op != 'N/A' else 'N/A'
     print(f" {'  Device Op (H2D / Imp-Sync)':<28} | {cu_op_str:<22} | {fb_op_str:<22} | H2D copy vs CUDA import")
     print('-' * 105)
-    print(" [3] System Resource Telemetry:")
-    pub_cpu_str = f'Mean: {pub_cpu_mean}% | Max: {pub_cpu_max}% (Dedicated process)' if pub_cpu_mean != 'N/A' else 'N/A'
-    print(f" {'  Publisher CPU Util':<28} | {pub_cpu_str}")
-    cu_sub_cpu_str = f'{cuda_sub_cpu_mean}% (Max {cuda_sub_cpu_max}%)' if cuda_sub_cpu_mean != 'N/A' else 'N/A'
-    fb_sub_cpu_str = f'{fallback_sub_cpu_mean}% (Max {fallback_sub_cpu_max}%)' if fallback_sub_cpu_mean != 'N/A' else 'N/A'
-    print(f" {'  Subscriber CPU Util':<28} | CUDA: {cu_sub_cpu_str} | Fallback: {fb_sub_cpu_str}")
-    cu_sub_rss_str = f'{cuda_sub_rss_peak} MB' if cuda_sub_rss_peak != 'N/A' else 'N/A'
-    fb_sub_rss_str = f'{fallback_sub_rss_peak} MB' if fallback_sub_rss_peak != 'N/A' else 'N/A'
-    pub_rss_str = f'{pub_rss_peak} MB' if pub_rss_peak != 'N/A' else 'N/A'
-    print(f" {'  Process Peak RSS':<28} | Pub: {pub_rss_str} | CUDA Sub: {cu_sub_rss_str} | Fallback Sub: {fb_sub_rss_str}")
-    print(f" {'  System RAM Used':<28} | {sys_ram} MB")
+    print(" System Resources:")
+    pub_cpu_str = f'Mean: {pub_cpu_mean}% | Peak: {pub_cpu_peak}%' if pub_cpu_mean != 'N/A' else 'N/A'
+    print(f" {'  Publisher CPU':<28} | {pub_cpu_str}")
+    cu_sub_cpu_str = f'Mean: {cuda_sub_cpu_mean}% (Peak {cuda_sub_cpu_peak}%)' if cuda_sub_cpu_mean != 'N/A' else 'N/A'
+    fb_sub_cpu_str = f'Mean: {fallback_sub_cpu_mean}% (Peak {fallback_sub_cpu_peak}%)' if fallback_sub_cpu_mean != 'N/A' else 'N/A'
+    print(f" {'  Subscriber CPU':<28} | CUDA: {cu_sub_cpu_str} | Fallback: {fb_sub_cpu_str}")
+    pub_pss_str = f'Mean: {pub_pss_mean} MB | Peak: {pub_pss_peak} MB' if pub_pss_mean != 'N/A' else 'N/A'
+    print(f" {'  Publisher PSS':<28} | {pub_pss_str}")
+    cu_sub_pss_str = f'Mean: {cuda_sub_pss_mean} MB (Peak {cuda_sub_pss_peak} MB)' if cuda_sub_pss_mean != 'N/A' else 'N/A'
+    fb_sub_pss_str = f'Mean: {fallback_sub_pss_mean} MB (Peak {fallback_sub_pss_peak} MB)' if fallback_sub_pss_mean != 'N/A' else 'N/A'
+    print(f" {'  Subscriber PSS':<28} | CUDA: {cu_sub_pss_str} | Fallback: {fb_sub_pss_str}")
     if gpu_util != 'N/A':
         gpu_str = f'{gpu_util}%' + (f' @ {gpu_freq} MHz' if gpu_freq != 'N/A' else '')
         print(f" {'  GPU Util / Freq':<28} | {gpu_str}")
     if emc_util != 'N/A' or emc_freq != 'N/A':
         emc_str = f'{emc_util}%' + (f' @ {emc_freq} MHz' if emc_freq != 'N/A' else '')
         print(f" {'  EMC Memory Controller':<28} | {emc_str}")
-    if cpu_temp != 'N/A' or gpu_temp != 'N/A':
-        cpu_t_str = f'{cpu_temp} C' if cpu_temp != 'N/A' else 'N/A'
-        gpu_t_str = f'{gpu_temp} C' if gpu_temp != 'N/A' else 'N/A'
-        temp_str = f'CPU: {cpu_t_str} | GPU: {gpu_t_str}'
-        print(f" {'  Temperatures':<28} | {temp_str}")
     print('=' * 105)
     print(f' Results saved to: {csv_file}\n')
 

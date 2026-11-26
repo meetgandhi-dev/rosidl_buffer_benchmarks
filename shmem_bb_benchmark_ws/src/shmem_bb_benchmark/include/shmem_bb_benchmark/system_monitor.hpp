@@ -21,7 +21,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
-#include <iostream>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -34,9 +33,8 @@ namespace shmem_bb_benchmark
 struct SystemMetricsSample
 {
   double process_cpu_pct{0.0};
-  double process_rss_mb{0.0};
-  double process_rss_peak_mb{0.0};
-  double system_ram_used_mb{0.0};
+  double process_pss_mb{0.0};
+  bool pss_valid{false};
   double gpu_util_pct{0.0};
   double gpu_freq_mhz{0.0};
   bool gpu_valid{false};
@@ -44,19 +42,16 @@ struct SystemMetricsSample
   double emc_util_pct{0.0};
   double emc_freq_mhz{0.0};
   bool emc_valid{false};
-  double cpu_temp_c{0.0};
-  bool cpu_temp_valid{false};
-  double gpu_temp_c{0.0};
-  bool gpu_temp_valid{false};
 };
 
 struct SystemMetricsSummary
 {
   double process_cpu_mean_pct{0.0};
   double process_cpu_max_pct{0.0};
-  double process_rss_mean_mb{0.0};
-  double process_rss_peak_mb{0.0};
-  double system_ram_mean_mb{0.0};
+  bool cpu_available{false};
+  double process_pss_mean_mb{0.0};
+  double process_pss_peak_mb{0.0};
+  bool pss_available{false};
   double gpu_util_mean_pct{0.0};
   double gpu_freq_mean_mhz{0.0};
   bool gpu_available{false};
@@ -64,10 +59,6 @@ struct SystemMetricsSummary
   double emc_util_mean_pct{0.0};
   double emc_freq_mean_mhz{0.0};
   bool emc_available{false};
-  double cpu_temp_mean_c{0.0};
-  bool cpu_temp_available{false};
-  double gpu_temp_mean_c{0.0};
-  bool gpu_temp_available{false};
 };
 
 class SystemMonitor
@@ -79,23 +70,32 @@ public:
     stop();
   }
 
-  void start(std::chrono::milliseconds interval = std::chrono::milliseconds(200))
+  void start(
+    std::chrono::milliseconds interval = std::chrono::milliseconds(200),
+    bool enable_gpu_telemetry = false)
   {
     if (running_.exchange(true)) {
       return;
     }
     sample_interval_ = interval;
-    samples_.clear();
+    enable_gpu_telemetry_ = enable_gpu_telemetry;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      samples_.clear();
+    }
     init_baseline();
 
     worker_thread_ = std::thread([this]() {
       while (running_.load()) {
+        std::this_thread::sleep_for(sample_interval_);
+        if (!running_.load()) {
+          break;
+        }
         auto sample = collect_single_sample();
         {
           std::lock_guard<std::mutex> lock(mutex_);
           samples_.push_back(sample);
         }
-        std::this_thread::sleep_for(sample_interval_);
       }
     });
   }
@@ -109,23 +109,54 @@ public:
     }
   }
 
+  static long get_online_cpu_count()
+  {
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return (n > 0) ? n : 1L;
+  }
+
+  static bool read_environment_ram_mb(double & total_ram_mb, double & avail_ram_mb)
+  {
+    total_ram_mb = 0.0;
+    avail_ram_mb = 0.0;
+    std::ifstream file("/proc/meminfo");
+    if (!file.is_open()) return false;
+
+    std::string line;
+    uint64_t mem_total_kb = 0, mem_avail_kb = 0;
+    bool got_total = false, got_avail = false;
+    while (std::getline(file, line)) {
+      if (line.rfind("MemTotal:", 0) == 0) {
+        std::istringstream ss(line.substr(9));
+        if (ss >> mem_total_kb) got_total = true;
+      } else if (line.rfind("MemAvailable:", 0) == 0) {
+        std::istringstream ss(line.substr(13));
+        if (ss >> mem_avail_kb) got_avail = true;
+      }
+      if (got_total && got_avail) break;
+    }
+    if (got_total) total_ram_mb = static_cast<double>(mem_total_kb) / 1024.0;
+    if (got_avail) avail_ram_mb = static_cast<double>(mem_avail_kb) / 1024.0;
+    return got_total;
+  }
+
   SystemMetricsSummary get_summary() const
   {
     std::lock_guard<std::mutex> lock(mutex_);
     SystemMetricsSummary summary;
     if (samples_.empty()) {
-      // Fallback: collect at least one instantaneous sample
-      double rss = 0.0, peak = 0.0;
-      read_process_rss_mb(rss, peak);
-      summary.process_rss_mean_mb = rss;
-      summary.process_rss_peak_mb = peak;
-      summary.system_ram_mean_mb = read_system_ram_used_mb();
+      double pss_mb = 0.0;
+      if (read_process_pss_mb(pss_mb)) {
+        summary.pss_available = true;
+        summary.process_pss_mean_mb = pss_mb;
+        summary.process_pss_peak_mb = pss_mb;
+      }
       return summary;
     }
 
     double sum_cpu = 0.0, max_cpu = 0.0;
-    double sum_rss = 0.0, peak_rss = 0.0;
-    double sum_sys_ram = 0.0;
+    double sum_pss = 0.0, peak_pss = 0.0;
+    std::size_t pss_count = 0;
     double sum_gpu = 0.0;
     std::size_t gpu_count = 0;
     double sum_gpu_freq = 0.0;
@@ -133,19 +164,16 @@ public:
     double sum_emc_util = 0.0;
     double sum_emc_freq = 0.0;
     std::size_t emc_count = 0;
-    double sum_cpu_temp = 0.0;
-    std::size_t cpu_temp_count = 0;
-    double sum_gpu_temp = 0.0;
-    std::size_t gpu_temp_count = 0;
 
     for (const auto & s : samples_) {
       sum_cpu += s.process_cpu_pct;
       max_cpu = std::max(max_cpu, s.process_cpu_pct);
 
-      sum_rss += s.process_rss_mb;
-      peak_rss = std::max(peak_rss, s.process_rss_peak_mb);
-
-      sum_sys_ram += s.system_ram_used_mb;
+      if (s.pss_valid) {
+        sum_pss += s.process_pss_mb;
+        peak_pss = std::max(peak_pss, s.process_pss_mb);
+        ++pss_count;
+      }
 
       if (s.gpu_valid) {
         sum_gpu += s.gpu_util_pct;
@@ -160,22 +188,18 @@ public:
         sum_emc_freq += s.emc_freq_mhz;
         ++emc_count;
       }
-      if (s.cpu_temp_valid) {
-        sum_cpu_temp += s.cpu_temp_c;
-        ++cpu_temp_count;
-      }
-      if (s.gpu_temp_valid) {
-        sum_gpu_temp += s.gpu_temp_c;
-        ++gpu_temp_count;
-      }
     }
 
     const double n = static_cast<double>(samples_.size());
+    summary.cpu_available = true;
     summary.process_cpu_mean_pct = sum_cpu / n;
     summary.process_cpu_max_pct = max_cpu;
-    summary.process_rss_mean_mb = sum_rss / n;
-    summary.process_rss_peak_mb = peak_rss;
-    summary.system_ram_mean_mb = sum_sys_ram / n;
+
+    if (pss_count > 0) {
+      summary.pss_available = true;
+      summary.process_pss_mean_mb = sum_pss / static_cast<double>(pss_count);
+      summary.process_pss_peak_mb = peak_pss;
+    }
 
     if (gpu_count > 0) {
       summary.gpu_available = true;
@@ -190,14 +214,6 @@ public:
       summary.emc_util_mean_pct = sum_emc_util / static_cast<double>(emc_count);
       summary.emc_freq_mean_mhz = sum_emc_freq / static_cast<double>(emc_count);
     }
-    if (cpu_temp_count > 0) {
-      summary.cpu_temp_available = true;
-      summary.cpu_temp_mean_c = sum_cpu_temp / static_cast<double>(cpu_temp_count);
-    }
-    if (gpu_temp_count > 0) {
-      summary.gpu_temp_available = true;
-      summary.gpu_temp_mean_c = sum_gpu_temp / static_cast<double>(gpu_temp_count);
-    }
 
     return summary;
   }
@@ -206,8 +222,11 @@ private:
   void init_baseline()
   {
     read_process_cpu_ticks(prev_proc_ticks_);
-    uint64_t idle = 0;
-    read_cpu_ticks(idle, prev_total_ticks_);
+    prev_wall_time_ = std::chrono::steady_clock::now();
+    last_pss_sample_time_ = prev_wall_time_ - std::chrono::seconds(2);  // sample PSS on first tick
+    clk_tck_ = sysconf(_SC_CLK_TCK);
+    if (clk_tck_ <= 0) clk_tck_ = 100;
+    num_cpus_ = get_online_cpu_count();
   }
 
   static bool read_process_cpu_ticks(uint64_t & proc_ticks)
@@ -232,97 +251,58 @@ private:
     return false;
   }
 
-  static void read_cpu_ticks(uint64_t & idle, uint64_t & total)
+  static bool read_process_pss_mb(double & pss_mb)
   {
-    idle = 0;
-    total = 0;
-    std::ifstream file("/proc/stat");
-    if (!file.is_open()) return;
+    pss_mb = 0.0;
+    std::ifstream file("/proc/self/smaps_rollup");
+    if (!file.is_open()) return false;
 
     std::string line;
-    if (std::getline(file, line) && line.rfind("cpu ", 0) == 0) {
-      std::istringstream ss(line.substr(4));
-      uint64_t user, nice, system, idle_t, iowait, irq, softirq, steal;
-      if (ss >> user >> nice >> system >> idle_t >> iowait >> irq >> softirq >> steal) {
-        idle = idle_t + iowait;
-        total = user + nice + system + idle_t + iowait + irq + softirq + steal;
+    while (std::getline(file, line)) {
+      if (line.rfind("Pss:", 0) == 0) {
+        std::istringstream ss(line.substr(4));
+        uint64_t pss_kb = 0;
+        if (ss >> pss_kb) {
+          pss_mb = static_cast<double>(pss_kb) / 1024.0;
+          return true;
+        }
       }
     }
+    return false;
   }
 
   SystemMetricsSample collect_single_sample()
   {
     SystemMetricsSample sample;
+    const auto now = std::chrono::steady_clock::now();
 
-    // 1. Process CPU Utilization
+    // 1. Process CPU Utilization: (process CPU time / elapsed wall-clock time) * 100 / online CPUs
     uint64_t proc_ticks = 0;
     read_process_cpu_ticks(proc_ticks);
     const uint64_t delta_proc = (proc_ticks >= prev_proc_ticks_) ? (proc_ticks - prev_proc_ticks_) : 0;
     prev_proc_ticks_ = proc_ticks;
 
-    uint64_t idle_ticks = 0, total_ticks = 0;
-    read_cpu_ticks(idle_ticks, total_ticks);
-    const uint64_t delta_total = (total_ticks >= prev_total_ticks_) ? (total_ticks - prev_total_ticks_) : 0;
-    prev_total_ticks_ = total_ticks;
+    const double elapsed_wall_sec = std::chrono::duration<double>(now - prev_wall_time_).count();
+    prev_wall_time_ = now;
 
-    if (delta_total > 0) {
-      long num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-      if (num_cpus <= 0) num_cpus = 1;
-      sample.process_cpu_pct = 100.0 * (static_cast<double>(delta_proc) / static_cast<double>(delta_total)) * static_cast<double>(num_cpus);
+    if (elapsed_wall_sec > 0.0) {
+      const double proc_cpu_sec = static_cast<double>(delta_proc) / static_cast<double>(clk_tck_);
+      sample.process_cpu_pct =
+        (proc_cpu_sec / elapsed_wall_sec) * 100.0 / static_cast<double>(num_cpus_);
     }
 
-    // 2. RAM (Process RSS and System RAM)
-    read_process_rss_mb(sample.process_rss_mb, sample.process_rss_peak_mb);
-    sample.system_ram_used_mb = read_system_ram_used_mb();
+    // 2. Process PSS (~1s sampling period via /proc/self/smaps_rollup)
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_pss_sample_time_).count() >= 1000) {
+      sample.pss_valid = read_process_pss_mb(sample.process_pss_mb);
+      last_pss_sample_time_ = now;
+    }
 
-    // 3. Hardware Telemetry (Jetson tegrastats / sysfs, or desktop nvidia-smi / sysfs thermal)
-    collect_hardware_telemetry(sample);
+    // 3. Optional GPU / EMC Telemetry (enabled only when requested)
+    if (enable_gpu_telemetry_) {
+      collect_hardware_telemetry(sample);
+    }
 
     return sample;
-  }
-
-  static void read_process_rss_mb(double & current_rss_mb, double & peak_rss_mb)
-  {
-    current_rss_mb = 0.0;
-    peak_rss_mb = 0.0;
-    std::ifstream file("/proc/self/status");
-    if (!file.is_open()) return;
-
-    std::string line;
-    while (std::getline(file, line)) {
-      if (line.rfind("VmRSS:", 0) == 0) {
-        std::istringstream ss(line.substr(6));
-        uint64_t rss_kb = 0;
-        ss >> rss_kb;
-        current_rss_mb = static_cast<double>(rss_kb) / 1024.0;
-      } else if (line.rfind("VmHWM:", 0) == 0) {
-        std::istringstream ss(line.substr(6));
-        uint64_t hwm_kb = 0;
-        ss >> hwm_kb;
-        peak_rss_mb = static_cast<double>(hwm_kb) / 1024.0;
-      }
-    }
-  }
-
-  static double read_system_ram_used_mb()
-  {
-    std::ifstream file("/proc/meminfo");
-    if (!file.is_open()) return 0.0;
-
-    std::string line;
-    uint64_t mem_total_kb = 0, mem_avail_kb = 0;
-    while (std::getline(file, line)) {
-      if (line.rfind("MemTotal:", 0) == 0) {
-        std::istringstream ss(line.substr(9));
-        ss >> mem_total_kb;
-      } else if (line.rfind("MemAvailable:", 0) == 0) {
-        std::istringstream ss(line.substr(13));
-        ss >> mem_avail_kb;
-      }
-      if (mem_total_kb > 0 && mem_avail_kb > 0) break;
-    }
-    return (mem_total_kb >= mem_avail_kb) ?
-      static_cast<double>(mem_total_kb - mem_avail_kb) / 1024.0 : 0.0;
   }
 
   static void collect_hardware_telemetry(SystemMetricsSample & sample)
@@ -340,23 +320,15 @@ private:
     }
 
     if (has_tegrastats) {
-      // Query Jetson tegrastats
       if (read_tegrastats_sample(sample)) {
         return;
       }
     }
 
-    // Try sysfs directly for Jetson devfreq / thermal
     read_sysfs_jetson_telemetry(sample);
 
-    // If GPU still not valid, try desktop nvidia-smi
     if (!sample.gpu_valid && has_nvidia_smi) {
       sample.gpu_valid = read_nvidia_smi_utilization(sample.gpu_util_pct);
-    }
-
-    // If temperatures still not found, try generic thermal zones (e.g. x86 / Linux generic)
-    if (!sample.cpu_temp_valid || !sample.gpu_temp_valid) {
-      read_generic_thermal_zones(sample);
     }
   }
 
@@ -369,14 +341,12 @@ private:
     pclose(pipe);
     if (!read_ok) return false;
 
-    std::string text(buffer);
-    parse_tegrastats_line(text, sample);
+    parse_tegrastats_line(std::string(buffer), sample);
     return true;
   }
 
   static void parse_tegrastats_line(const std::string & text, SystemMetricsSample & sample)
   {
-    // Parse GR3D_FREQ: e.g. "GR3D_FREQ 15%@1300" or "GR3D_FREQ 0%@..."
     auto pos_gr3d = text.find("GR3D_FREQ");
     if (pos_gr3d != std::string::npos) {
       auto start = pos_gr3d + 9;
@@ -399,7 +369,6 @@ private:
       }
     }
 
-    // Parse EMC_FREQ: e.g. "EMC_FREQ 2%@3199" or "EMC_FREQ 0%@204"
     auto pos_emc = text.find("EMC_FREQ");
     if (pos_emc != std::string::npos) {
       auto start = pos_emc + 8;
@@ -416,46 +385,10 @@ private:
         } catch (...) {}
       }
     }
-
-    // Parse CPU / GPU temperatures: e.g. "cpu 38.5C", "gpu 37.6C", "CPU@38.5C", "GPU@37.6C"
-    // Case-insensitive / common tegrastats tokens
-    parse_temperature_token(text, "cpu", sample.cpu_temp_c, sample.cpu_temp_valid);
-    if (!sample.cpu_temp_valid) {
-      parse_temperature_token(text, "CPU", sample.cpu_temp_c, sample.cpu_temp_valid);
-    }
-    parse_temperature_token(text, "gpu", sample.gpu_temp_c, sample.gpu_temp_valid);
-    if (!sample.gpu_temp_valid) {
-      parse_temperature_token(text, "GPU", sample.gpu_temp_c, sample.gpu_temp_valid);
-    }
-  }
-
-  static void parse_temperature_token(const std::string & text, const std::string & token, double & temp_c, bool & valid)
-  {
-    auto pos = text.find(token);
-    while (pos != std::string::npos) {
-      // Check word boundary before token
-      if (pos == 0 || text[pos - 1] == ' ' || text[pos - 1] == '[' || text[pos - 1] == ',') {
-        auto after = pos + token.size();
-        if (after < text.size() && (text[after] == ' ' || text[after] == '@')) {
-          while (after < text.size() && (text[after] == ' ' || text[after] == '@')) ++after;
-          auto end = after;
-          while (end < text.size() && (std::isdigit(text[end]) || text[end] == '.' || text[end] == '-')) ++end;
-          if (end > after && end < text.size() && (text[end] == 'C' || text[end] == 'c')) {
-            try {
-              temp_c = std::stod(text.substr(after, end - after));
-              valid = true;
-              return;
-            } catch (...) {}
-          }
-        }
-      }
-      pos = text.find(token, pos + 1);
-    }
   }
 
   static void read_sysfs_jetson_telemetry(SystemMetricsSample & sample)
   {
-    // Check GPU load from Jetson sysfs nodes
     static const std::vector<std::string> gpu_load_paths = {
       "/sys/devices/gpu.0/load",
       "/sys/devices/platform/17000000.gpu/devfreq/17000000.gpu/device/load",
@@ -466,7 +399,6 @@ private:
       if (f.is_open()) {
         double val = 0.0;
         if (f >> val) {
-          // On some kernels load is 0-1000 (per mille), on others 0-100%
           if (val > 100.0) val /= 10.0;
           sample.gpu_util_pct = val;
           sample.gpu_valid = true;
@@ -475,7 +407,6 @@ private:
       }
     }
 
-    // Check GPU frequency from Jetson devfreq
     static const std::vector<std::string> gpu_freq_paths = {
       "/sys/devices/platform/17000000.gpu/devfreq/17000000.gpu/cur_freq",
       "/sys/devices/platform/17000000.ga10b/devfreq/17000000.ga10b/cur_freq",
@@ -493,7 +424,6 @@ private:
       }
     }
 
-    // Check EMC frequency / utilization
     static const std::vector<std::string> emc_freq_paths = {
       "/sys/kernel/debug/clk/emc/clk_rate",
       "/sys/devices/platform/17000010.devfreq-emc/devfreq/17000010.devfreq-emc/cur_freq"
@@ -506,45 +436,6 @@ private:
           sample.emc_freq_mhz = hz > 1e6 ? hz / 1e6 : (hz > 1e3 ? hz / 1e3 : hz);
           sample.emc_valid = true;
           break;
-        }
-      }
-    }
-  }
-
-  static void read_generic_thermal_zones(SystemMetricsSample & sample)
-  {
-    for (int zone = 0; zone < 20; ++zone) {
-      std::string type_path = "/sys/class/thermal/thermal_zone" + std::to_string(zone) + "/type";
-      std::string temp_path = "/sys/class/thermal/thermal_zone" + std::to_string(zone) + "/temp";
-      std::ifstream type_file(type_path);
-      if (!type_file.is_open()) break;
-      std::string type_name;
-      std::getline(type_file, type_name);
-
-      std::ifstream temp_file(temp_path);
-      if (!temp_file.is_open()) continue;
-      double raw_temp = 0.0;
-      if (!(temp_file >> raw_temp)) continue;
-      double temp_c = (raw_temp > 1000.0) ? (raw_temp / 1000.0) : raw_temp;
-
-      // Identify CPU thermal zone
-      if (!sample.cpu_temp_valid) {
-        if (type_name == "CPU-therm" || type_name == "cpu-therm" ||
-            type_name == "TCPU" || type_name == "x86_pkg_temp" ||
-            type_name.find("cpu") != std::string::npos ||
-            type_name.find("CPU") != std::string::npos) {
-          sample.cpu_temp_c = temp_c;
-          sample.cpu_temp_valid = true;
-        }
-      }
-
-      // Identify GPU thermal zone
-      if (!sample.gpu_temp_valid) {
-        if (type_name == "GPU-therm" || type_name == "gpu-therm" ||
-            type_name.find("gpu") != std::string::npos ||
-            type_name.find("GPU") != std::string::npos) {
-          sample.gpu_temp_c = temp_c;
-          sample.gpu_temp_valid = true;
         }
       }
     }
@@ -569,12 +460,16 @@ private:
 
   std::atomic<bool> running_{false};
   std::chrono::milliseconds sample_interval_{200};
+  bool enable_gpu_telemetry_{false};
   mutable std::mutex mutex_;
   std::vector<SystemMetricsSample> samples_;
   std::thread worker_thread_;
 
   uint64_t prev_proc_ticks_{0};
-  uint64_t prev_total_ticks_{0};
+  std::chrono::steady_clock::time_point prev_wall_time_{};
+  std::chrono::steady_clock::time_point last_pss_sample_time_{};
+  long clk_tck_{100};
+  long num_cpus_{1};
 };
 
 }  // namespace shmem_bb_benchmark

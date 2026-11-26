@@ -78,7 +78,7 @@ def compute_average_row(rows, header):
 
         if is_numeric and values:
             mean_v = sum(values) / len(values)
-            if 'fps' in col or 'pct' in col or 'util' in col or 'ram' in col or 'rss' in col or 'temp' in col:
+            if 'fps' in col or 'pct' in col or 'util' in col or 'pss' in col or 'mb' in col:
                 avg_row[col] = f"{mean_v:.2f}"
             elif 'ms' in col:
                 avg_row[col] = f"{mean_v:.3f}"
