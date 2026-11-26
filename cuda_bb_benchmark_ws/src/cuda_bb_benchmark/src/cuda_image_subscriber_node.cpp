@@ -620,8 +620,6 @@ void CudaImageSubscriberNode::write_summary_report(
   const auto cb_stats = calc_stats(callback_latencies_ms_);
   const auto br_stats = calc_stats(buffer_ready_latencies_ms_);
   const auto op_stats = calc_stats(device_op_latencies_ms_);
-  const double sync_overhead_mean_ms = (br_stats.mean_ms >= cb_stats.mean_ms) ?
-    (br_stats.mean_ms - cb_stats.mean_ms) : 0.0;
 
   const std::size_t measured_frames = callback_latencies_ms_.size();
   const std::size_t size_bytes = (last_payload_size_ > 0) ?
