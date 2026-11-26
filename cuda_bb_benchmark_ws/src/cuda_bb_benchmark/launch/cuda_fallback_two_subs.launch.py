@@ -174,7 +174,7 @@ def merge_and_print_csv_results(*args, **kwargs):
     mean_speedup = calc_speedup(fallback_mean, cuda_br_mean)
 
     # CUDA import/sync vs CPU H2D overhead
-    cuda_device_op = cuda_data.get('device_op_mean_ms', cuda_sync_overhead) if cuda_data else 'N/A'
+    cuda_device_op = cuda_data.get('device_op_mean_ms', 'N/A') if cuda_data else 'N/A'
     fallback_device_op = fallback_data.get('device_op_mean_ms', 'N/A') if fallback_data else 'N/A'
 
     # Resource telemetry
