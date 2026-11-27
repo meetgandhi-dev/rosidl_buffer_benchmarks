@@ -34,7 +34,7 @@ CudaImagePublisherNode::CudaImagePublisherNode(const rclcpp::NodeOptions & optio
   publish_rate_hz_ = declare_parameter<double>("rate", 10.0);
   image_width_ = declare_parameter<int>("width", 640);
   image_height_ = declare_parameter<int>("height", 480);
-  encoding_ = declare_parameter<std::string>("encoding", "mono8");
+  encoding_ = declare_parameter<std::string>("encoding", "rgb8");
   const int default_history = std::max(80, static_cast<int>(publish_rate_hz_ * 2.5));
   history_depth_ = declare_parameter<int>("history_depth", default_history);
   max_messages_ = declare_parameter<int>("max_messages", 0);

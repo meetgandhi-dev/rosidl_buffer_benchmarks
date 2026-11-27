@@ -61,7 +61,7 @@ private:
   double publish_rate_hz_{10.0};
   int image_width_{640};
   int image_height_{480};
-  std::string encoding_{"mono8"};
+  std::string encoding_{"rgb8"};
   int history_depth_{20};
   int max_messages_{0};
   int warmup_messages_{10};

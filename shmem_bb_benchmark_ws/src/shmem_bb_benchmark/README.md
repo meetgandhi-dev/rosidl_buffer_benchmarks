@@ -18,7 +18,7 @@ This package provides standalone executable nodes, composable components, launch
   - `rate` (`double`, default: `10.0`): Publishing rate in Hz.
   - `width` (`int`, default: `640`): Frame width.
   - `height` (`int`, default: `480`): Frame height.
-  - `encoding` (`string`, default: `"mono8"`): Image encoding.
+  - `encoding` (`string`, default: `"rgb8"`): Image encoding.
   - `history_depth` (`int`, default: `20`): Number of published messages kept alive in pool history.
   - `max_messages` (`int`, default: `0`): Number of messages to publish before stopping (0 = infinite).
   - `wait_for_subscriber` (`bool`, default: `false`): Wait until at least one subscriber is connected before publishing.
