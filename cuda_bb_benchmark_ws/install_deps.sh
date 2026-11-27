@@ -29,7 +29,8 @@ if [ -z "${ROS_DISTRO}" ]; then
   elif [ -f "/opt/ros/rolling/setup.bash" ]; then
     source "/opt/ros/rolling/setup.bash"
   else
-    echo "Warning: No ROS 2 underlay found in /opt/ros/{lyrical,rolling}."
+    echo "Error: No ROS 2 underlay found in /opt/ros/{lyrical,rolling}."
+    exit 1
   fi
 fi
 
@@ -40,13 +41,10 @@ if [ ! -d "/etc/ros/rosdep/sources.list.d" ]; then
 fi
 
 echo "Updating rosdep database..."
-rosdep update --include-eol-distros 2>/dev/null || rosdep update || true
-
-# Target packages up to cuda_bb_benchmark to avoid installing unused deps (e.g. torch, libtorch)
-TARGET_PATHS=$(colcon list --packages-up-to cuda_bb_benchmark --paths-only 2>/dev/null || echo "src/cuda_bb_benchmark src/rosidl_buffer_backends/cuda_buffer_backend")
+rosdep update || true
 
 echo "Installing package dependencies via rosdep..."
-rosdep install --from-paths ${TARGET_PATHS} --ignore-src -y -r
+rosdep install --from-paths src --ignore-src -y -r --skip-keys "fastcdr rti-connext-dds-7.7.0 urdfdom_headers qt6-svg-dev nvidia-cuda cuda-toolkit"
 
 echo "=========================================================="
 echo " Dependencies installed successfully for cuda workspace!"

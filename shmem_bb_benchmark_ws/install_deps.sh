@@ -29,7 +29,8 @@ if [ -z "${ROS_DISTRO}" ]; then
   elif [ -f "/opt/ros/rolling/setup.bash" ]; then
     source "/opt/ros/rolling/setup.bash"
   else
-    echo "Warning: No ROS 2 underlay found in /opt/ros/{lyrical,rolling}."
+    echo "Error: No ROS 2 underlay found in /opt/ros/{lyrical,rolling}."
+    exit 1
   fi
 fi
 
@@ -40,13 +41,10 @@ if [ ! -d "/etc/ros/rosdep/sources.list.d" ]; then
 fi
 
 echo "Updating rosdep database..."
-rosdep update --include-eol-distros 2>/dev/null || rosdep update || true
-
-# Target packages up to shmem_bb_benchmark
-TARGET_PATHS=$(colcon list --packages-up-to shmem_bb_benchmark --paths-only 2>/dev/null || echo "src")
+rosdep update || true
 
 echo "Installing package dependencies via rosdep..."
-rosdep install --from-paths ${TARGET_PATHS} --ignore-src -y -r
+rosdep install --from-paths src --ignore-src -y
 
 echo "=========================================================="
 echo " Dependencies installed successfully for shmem workspace!"
