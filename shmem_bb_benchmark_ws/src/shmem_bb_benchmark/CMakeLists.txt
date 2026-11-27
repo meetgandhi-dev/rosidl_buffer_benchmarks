@@ -83,7 +83,6 @@ install(
 
 install(
   PROGRAMS
-    scripts/run_iterations.py
     scripts/run_benchmark.py
   DESTINATION lib/${PROJECT_NAME}
 )

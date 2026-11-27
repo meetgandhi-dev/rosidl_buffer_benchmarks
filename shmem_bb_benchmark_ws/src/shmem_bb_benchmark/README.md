@@ -1,119 +1,74 @@
 # shmem_bb_benchmark
 
-A comprehensive ROS 2 test and verification package for [`shmem_buffer_backend`](../shmem_buffer_backend) and [`shmem_buffer`](../shmem_buffer).
-
-This package provides standalone executable nodes, composable components, launch files, unit tests (GTest & pytest), and integration launch tests (`launch_testing`) to test and demonstrate zero-copy shared-memory transport for `rosidl::Buffer<uint8_t>` in ROS 2 (e.g. `sensor_msgs/msg/Image`).
+ROS 2 benchmarking and verification package for [`shmem_buffer_backend`](../shmem_buffer_backend) and [`shmem_buffer`](../shmem_buffer).
 
 ---
 
-## Features & Included Nodes
+## 1. Nodes
 
-### 1. `shmem_image_publisher_node`
-- Publishes `sensor_msgs::msg::Image` messages whose payload is allocated in shared memory using `shmem_buffer::allocate_buffer()`.
-- Obtains exclusive zero-copy write access via `shmem_buffer::from_output_buffer()`.
-- Writes deterministic test patterns for data verification.
-- Implements a configurable message history ring buffer to maintain references to active pool blocks while in flight.
-- **Parameters**:
-  - `topic` (`string`, default: `"test_shmem_image"`): Output image topic.
-  - `rate` (`double`, default: `10.0`): Publishing rate in Hz.
-  - `width` (`int`, default: `640`): Frame width.
-  - `height` (`int`, default: `480`): Frame height.
-  - `encoding` (`string`, default: `"rgb8"`): Image encoding.
-  - `history_depth` (`int`, default: `20`): Number of published messages kept alive in pool history.
-  - `max_messages` (`int`, default: `0`): Number of messages to publish before stopping (0 = infinite).
-  - `wait_for_subscriber` (`bool`, default: `false`): Wait until at least one subscriber is connected before publishing.
+### `shmem_image_publisher_node`
+- Publishes `sensor_msgs::msg::Image` (`rgb8`, 3 bytes/pixel by default) using `shmem_buffer::allocate_buffer()` + `shmem_buffer::from_output_buffer()` when `use_shm:=true`, or standard CPU `rosidl::Buffer<uint8_t>` when `use_shm:=false`.
+- **Key parameters**: `topic` (`"test_shmem_image"`), `rate` (`10.0`), `width` (`640`), `height` (`480`), `encoding` (`"rgb8"`), `history_depth` (`max(80, rate * 2.5)`), `max_messages` (`0`), `warmup_messages` (`10`), `use_shm` (`true`), `auto_exit` (`false`).
 
-### 2. `shmem_image_subscriber_node`
-- Subscribes to `sensor_msgs::msg::Image` with `subscription_options.acceptable_buffer_backends = "shmem"` to enforce zero-copy shared-memory transport and reject fallback to CPU copies.
-- Verifies that `msg->data.get_backend_type() == "shmem"`.
-- Reads buffer data using `shmem_buffer::from_input_buffer()` without copying.
-- Validates payload integrity against the deterministic test pattern.
-- Computes message transmission latency.
-- Publishes diagnostic validation topics (`<result_prefix>/count`, `<result_prefix>/all_valid`, `<result_prefix>/backend_valid`, `<result_prefix>/content_valid`).
-- **Parameters**:
-  - `topic` (`string`, default: `"test_shmem_image"`): Input image topic.
-  - `result_prefix` (`string`, default: `"shmem_test"`): Prefix for status and diagnostic topics.
-  - `require_shmem` (`bool`, default: `true`): Require shared-memory backend.
-  - `verify_content` (`bool`, default: `true`): Verify payload data byte-by-byte.
-  - `publish_diagnostics` (`bool`, default: `true`): Publish validation status topics.
+### `shmem_image_subscriber_node`
+- Subscribes with `acceptable_buffer_backends = "shmem"` when `use_shm && require_shmem`.
+- Acquires `read_handle->get_ptr()` for `"shmem"` or `msg->data.data()` for `"cpu"`, verifies payload bytes (`verify_content:=true`), and logs callback-entry and data-ready latencies plus process CPU% and PSS.
 
 ---
 
-## Building and Running
+## 2. Launch Files
 
-### Build
+> **RMW requirement**: All launch files validate `RMW_IMPLEMENTATION` and support only `rmw_fastrtps_cpp` (`_fastrtps.csv`) and `rmw_zenoh_cpp` (`_zenoh.csv`).
 
-```bash
-source /opt/ros/lyrical/setup.bash
-colcon build --packages-select shmem_bb_benchmark
-```
+### 2.1 `shmem_fallback_two_subs.launch.py`
+Runs 1 SHMEM publisher (`use_shm:=true`) with configurable subscribers via `sub_mode`:
+- `sub_mode:=both` (default): `subscriber_shared` (zero-copy SHMEM) + `subscriber_fallback` (CPU wire)
+- `sub_mode:=shmem`: only `subscriber_shared`
+- `sub_mode:=cpu`: only `subscriber_fallback`
 
-### Run Launch Files Interactively
-
-1. **Mixed Publisher + 2 Subscribers (Shared + Fallback)**:
-   Runs 3 nodes: 1 shared publisher, 1 shared subscriber (zero-copy), and 1 fallback subscriber (standard DDS wire copy) simultaneously on the same topic. Automatically runs for `max_msgs` frames (default: 1000) and displays merged comparison results in both a formatted terminal table and a merged CSV format comparing both subscribers:
-   ```bash
-   source install/setup.bash
-   # Run 1000 frames (default) and output merged comparison CSV:
-   ros2 launch shmem_bb_benchmark shmem_fallback_two_subs.launch.py \
-     width:=1920 height:=1080 rate:=30.0
-
-   # Or customize frame count and output path:
-   ros2 launch shmem_bb_benchmark shmem_fallback_two_subs.launch.py \
-     width:=1920 height:=1080 rate:=30.0 max_msgs:=500 csv_path:=/tmp/comparison.csv
-   ```
-   **Merged CSV Schema**:
-   `resolution,size_bytes,target_hz,frame_cap,shmem_frames,fallback_frames,shmem_avg_latency_ms,fallback_avg_latency_ms,latency_diff_ms,speedup,shmem_min_latency_ms,fallback_min_latency_ms,shmem_max_latency_ms,fallback_max_latency_ms,shmem_std_dev_ms,fallback_std_dev_ms`
-
-2. **Selectable Mode Pub/Sub (Shared vs Wire)**:
-   Runs 2 nodes (1 publisher and 1 subscriber) in either `shared` (zero-copy SHM) or `wire` (standard DDS CPU copy) mode. Automatically runs for `max_msgs` frames (default: 1000) and displays final results in CSV format:
-   ```bash
-   source install/setup.bash
-   # Run in Shared Memory mode:
-   ros2 launch shmem_bb_benchmark shmem_or_wire_pub_sub.launch.py \
-     width:=1920 height:=1080 rate:=30.0 mode:=shared max_msgs:=1000
-
-   # Run in Wire / Fallback mode:
-   ros2 launch shmem_bb_benchmark shmem_or_wire_pub_sub.launch.py \
-     width:=1920 height:=1080 rate:=30.0 mode:=wire max_msgs:=1000
-   ```
-
-### Run Standalone Nodes Manually
-
-Terminal 1 (Subscriber):
 ```bash
 source install/setup.bash
-ros2 run shmem_bb_benchmark shmem_image_subscriber_node
+
+# Parallel SHMEM + CPU fallback (1000 benchmark frames + 10 warm-up)
+ros2 launch shmem_bb_benchmark shmem_fallback_two_subs.launch.py \
+  width:=1920 height:=1080 rate:=30.0 max_msgs:=1000 sub_mode:=both
+
+# SHMEM -> CPU only
+ros2 launch shmem_bb_benchmark shmem_fallback_two_subs.launch.py \
+  width:=1920 height:=1080 rate:=30.0 max_msgs:=1000 sub_mode:=cpu
 ```
 
-Terminal 2 (Publisher):
+**Arguments**: `width` (`1920`), `height` (`1080`), `rate` (`30.0`), `max_msgs` (`1000`, `<= 0` falls back to `1000`), `warmup_msgs` (`10`), `history_depth` (`80`), `sub_mode` (`both`), `csv_path` (`/tmp/shmem_fallback_comparison_<rmw>.csv`), `shmem_latency_csv_path` (`""`), `fallback_latency_csv_path` (`""`).
+
+### 2.2 `shmem_or_wire_pub_sub.launch.py`
+Runs 1 publisher and 1 subscriber in separate processes in either `shared` (SHMEM zero-copy) or `wire` (CPU) mode:
+
 ```bash
-source install/setup.bash
-ros2 run shmem_bb_benchmark shmem_image_publisher_node --ros-args -p rate:=20.0
+# Zero-copy SHMEM -> SHMEM
+ros2 launch shmem_bb_benchmark shmem_or_wire_pub_sub.launch.py \
+  width:=1920 height:=1080 rate:=30.0 mode:=shared max_msgs:=1000
+
+# Standard CPU -> CPU over RMW
+ros2 launch shmem_bb_benchmark shmem_or_wire_pub_sub.launch.py \
+  width:=1920 height:=1080 rate:=30.0 mode:=wire max_msgs:=1000
+```
+
+**Arguments**: `width` (`1920`), `height` (`1080`), `rate` (`30.0`), `mode` (`shared`), `max_msgs` (`1000`, `<= 0` falls back to `1000`), `warmup_msgs` (`10`), `history_depth` (`80`), `csv_path` (`/tmp/shmem_mode_results_<rmw>.csv`), `latency_csv_path` (`""`).
+
+---
+
+## 3. Suite Runner (`run_benchmark.py`)
+
+Runs all 4 SHMEM transport cases (`cpu_to_cpu`, `shmem_to_shmem`, `shmem_to_cpu`, `shmem_to_cpu_and_shmem`) for `iterations` runs and writes one CSV per case (including per-iteration rows, `AVERAGE_PER_RUN`, and `POOLED_RESULTS`) in the current working directory:
+
+```bash
+ros2 run shmem_bb_benchmark run_benchmark.py \
+  --resolution 1920x1080 --rate 30.0 --max-msgs 300 --iterations 5
 ```
 
 ---
 
-## Iteration Benchmarking: Single Resolution Repeated Runs
+## 4. CSV Schemas
 
-To run repeated benchmark iterations for a single resolution and compute averages across runs:
-
-```bash
-source install/setup.bash
-ros2 run shmem_bb_benchmark run_iterations.py \
-  --iterations 5 \
-  --resolution 1920x1080 \
-  --rate 30.0 \
-  --max-msgs 1000 \
-  --sub-mode both \
-  --output shmem_1080p_5iterations.csv
-```
-
-You can also run nodes individually with non-shm mode:
-```bash
-# Non-shm subscriber
-ros2 run shmem_bb_benchmark shmem_image_subscriber_node --ros-args -p use_shm:=false
-
-# Non-shm publisher
-ros2 run shmem_bb_benchmark shmem_image_publisher_node --ros-args -p use_shm:=false
-```
+- **Two-subscriber (`shmem_fallback_two_subs.launch.py`)**: `resolution, size_bytes, target_hz, actual_pub_fps, shmem_recv_fps, fallback_recv_fps, total_published_frames, shmem_received_frames, fallback_received_frames, shmem_dropped_frames, fallback_dropped_frames, shmem_loss_pct, fallback_loss_pct, shmem_p50_ms, fallback_p50_ms, p50_speedup, shmem_p95_ms, fallback_p95_ms, shmem_p99_ms, fallback_p99_ms, p99_speedup, shmem_mean_ms, fallback_mean_ms, mean_speedup, shmem_min_ms, fallback_min_ms, shmem_max_ms, fallback_max_ms, shmem_std_ms, fallback_std_ms, shmem_outliers, fallback_outliers, shmem_dr_*, fallback_dr_*, pub_cpu_*, shmem_sub_cpu_*, fallback_sub_cpu_*, pub_pss_*, shmem_sub_pss_*, fallback_sub_pss_*`.
+- **Single-mode (`shmem_or_wire_pub_sub.launch.py`)**: `backend, size_bytes, resolution, target_hz, actual_pub_fps, actual_recv_fps, total_published_frames, total_received_frames, dropped_frames, frame_loss_pct, failed_data_access_count, failed_content_verify_count, mean_latency_ms, min_latency_ms, p50_latency_ms, p95_latency_ms, p99_latency_ms, max_latency_ms, std_dev_ms, outliers_3sigma_count, data_ready_*, pub_cpu_*, sub_cpu_*, pub_pss_*, sub_pss_*`.
