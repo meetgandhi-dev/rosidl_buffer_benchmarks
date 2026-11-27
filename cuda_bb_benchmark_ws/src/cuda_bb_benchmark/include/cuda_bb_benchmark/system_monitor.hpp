@@ -334,7 +334,7 @@ private:
 
   static bool read_tegrastats_sample(SystemMetricsSample & sample)
   {
-    FILE * pipe = popen("tegrastats --interval 100 2>/dev/null | head -n 1", "r");
+    FILE * pipe = popen("timeout 1s tegrastats --interval 100 2>/dev/null | head -n 1", "r");
     if (!pipe) return false;
     char buffer[1024];
     bool read_ok = (fgets(buffer, sizeof(buffer), pipe) != nullptr);

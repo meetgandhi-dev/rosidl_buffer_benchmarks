@@ -56,6 +56,8 @@ private:
 
   cudaStream_t stream_{nullptr};
   int cuda_device_id_{0};
+  void * gpu_src_buffer_{nullptr};
+  std::size_t gpu_src_buffer_size_{0};
 
   std::string topic_name_{"test_cuda_image"};
   double publish_rate_hz_{10.0};

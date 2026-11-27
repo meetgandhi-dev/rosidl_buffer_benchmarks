@@ -45,7 +45,7 @@ CudaImagePublisherNode::CudaImagePublisherNode(const rclcpp::NodeOptions & optio
   cuda_device_id_ = declare_parameter<int>("cuda_device_id", 0);
   summary_csv_path_ = declare_parameter<std::string>("summary_csv_path", "");
 
-  if (use_cuda_) {
+  {
     cudaError_t err = cudaSetDevice(cuda_device_id_);
     if (err != cudaSuccess) {
       RCLCPP_FATAL(
@@ -85,6 +85,13 @@ CudaImagePublisherNode::~CudaImagePublisherNode()
 {
   if (stream_ != nullptr) {
     cudaStreamSynchronize(stream_);
+  }
+  if (gpu_src_buffer_ != nullptr) {
+    cudaFree(gpu_src_buffer_);
+    gpu_src_buffer_ = nullptr;
+    gpu_src_buffer_size_ = 0;
+  }
+  if (stream_ != nullptr) {
     cudaStreamDestroy(stream_);
     stream_ = nullptr;
   }
@@ -199,9 +206,65 @@ void CudaImagePublisherNode::publish_timer_callback()
       return;
     }
   } else {
-    // Non-CUDA CPU-backed transport: allocate and populate standard CPU buffer
+    // Wire transport path: populate on CUDA GPU, then copy D2H into standard CPU rosidl::Buffer
+    bool cpu_pub_ok = true;
     msg.data = rosidl::Buffer<std::uint8_t>(payload_size);
-    std::memset(msg.data.data(), static_cast<int>(pattern_byte), payload_size);
+    if (payload_size > 0) {
+      if (gpu_src_buffer_ == nullptr || gpu_src_buffer_size_ < payload_size) {
+        if (gpu_src_buffer_ != nullptr) {
+          cudaFree(gpu_src_buffer_);
+          gpu_src_buffer_ = nullptr;
+          gpu_src_buffer_size_ = 0;
+        }
+        cudaError_t alloc_err = cudaMalloc(&gpu_src_buffer_, payload_size);
+        if (alloc_err != cudaSuccess || gpu_src_buffer_ == nullptr) {
+          cpu_pub_ok = false;
+          RCLCPP_ERROR(
+            get_logger(), "cudaMalloc failed for staging buffer on msg #%zu: %s; skipping publish.",
+            seq, cudaGetErrorString(alloc_err));
+        } else {
+          gpu_src_buffer_size_ = payload_size;
+        }
+      }
+
+      if (cpu_pub_ok) {
+        cudaError_t err = cudaMemsetAsync(
+          gpu_src_buffer_, static_cast<int>(pattern_byte), payload_size, stream_);
+        if (err != cudaSuccess) {
+          cpu_pub_ok = false;
+          RCLCPP_ERROR(
+            get_logger(), "cudaMemsetAsync failed on staging buffer msg #%zu: %s; skipping publish.",
+            seq, cudaGetErrorString(err));
+        } else if (msg.data.data() == nullptr) {
+          cpu_pub_ok = false;
+          RCLCPP_ERROR(
+            get_logger(), "CPU output buffer pointer is null on msg #%zu; skipping publish.", seq);
+        } else {
+          err = cudaMemcpyAsync(
+            msg.data.data(), gpu_src_buffer_, payload_size,
+            cudaMemcpyDeviceToHost, stream_);
+          if (err != cudaSuccess) {
+            cpu_pub_ok = false;
+            RCLCPP_ERROR(
+              get_logger(), "cudaMemcpyAsync(D2H) failed on msg #%zu: %s; skipping publish.",
+              seq, cudaGetErrorString(err));
+          } else {
+            err = cudaStreamSynchronize(stream_);
+            if (err != cudaSuccess) {
+              cpu_pub_ok = false;
+              RCLCPP_ERROR(
+                get_logger(), "cudaStreamSynchronize failed after D2H copy on msg #%zu: %s; skipping publish.",
+                seq, cudaGetErrorString(err));
+            }
+          }
+        }
+      }
+    }
+
+    if (!cpu_pub_ok) {
+      ++failed_pub_ops_count_;
+      return;
+    }
   }
 
   // Keep recent published messages alive in pool ring buffer
@@ -218,7 +281,7 @@ void CudaImagePublisherNode::publish_timer_callback()
 
   if (seq == static_cast<std::size_t>(warmup_messages_ + 1)) {
     benchmark_start_time_ = steady_now;
-    proc_monitor_.start(std::chrono::milliseconds(200), true);
+    proc_monitor_.start(std::chrono::milliseconds(200), false);
   }
   if (seq > static_cast<std::size_t>(warmup_messages_)) {
     benchmark_end_time_ = steady_now;
