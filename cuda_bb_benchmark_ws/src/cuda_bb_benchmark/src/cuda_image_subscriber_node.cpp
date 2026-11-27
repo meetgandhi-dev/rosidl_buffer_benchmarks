@@ -299,8 +299,21 @@ void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShare
       gpu_ready_time.time_since_epoch()).count();
     device_op_time_ms = std::chrono::duration<double, std::milli>(
       gpu_ready_time - op_start).count();
+  } else if (backend == "cpu" && !use_cuda_) {
+    // Pure CPU fallback path (Cases 3 & 4): keep payload on host memory without copying to GPU
+    if (payload_size > 0 && msg->data.data() == nullptr) {
+      gpu_op_ok = false;
+      RCLCPP_ERROR(
+        get_logger(),
+        "Null host buffer pointer on CPU fallback path (msg #%zu)",
+        received_count_);
+    }
+    const auto buf_ready_time = std::chrono::steady_clock::now();
+    buf_ready_steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      buf_ready_time.time_since_epoch()).count();
+    device_op_time_ms = 0.0;
   } else if (backend == "cpu") {
-    // CPU path: copy payload from CPU host memory to destination GPU memory (H2D)
+    // CPU->GPU path (Case 1): copy payload from CPU host memory to destination GPU memory (H2D)
     // Allocate destination GPU buffer once (during warm-up) and reuse it across frames
     if (payload_size > gpu_dest_buffer_size_) {
       if (gpu_dest_buffer_ != nullptr) {
@@ -384,44 +397,66 @@ void CudaImageSubscriberNode::image_callback(sensor_msgs::msg::Image::ConstShare
     } else if (payload_size > 0) {
       try {
         const uint8_t expected_val = generate_sequence_byte(seq);
-        const void * gpu_src_ptr = (backend == "cuda") ?
-          (read_handle.has_value() ? read_handle->get_ptr() : nullptr) :
-          gpu_dest_buffer_;
-
-        if (gpu_src_ptr == nullptr) {
-          content_valid = false;
-          RCLCPP_ERROR(
-            get_logger(),
-            "No valid GPU pointer available for content verification on msg #%zu",
-            received_count_);
-        } else {
-          std::vector<uint8_t> host_buffer(payload_size);
-          cudaError_t d2h_err = cudaMemcpyAsync(
-            host_buffer.data(), gpu_src_ptr, payload_size,
-            cudaMemcpyDeviceToHost, stream_);
-          if (d2h_err != cudaSuccess) {
+        if (backend == "cpu" && !use_cuda_) {
+          const uint8_t * host_ptr = msg->data.data();
+          if (host_ptr == nullptr) {
             content_valid = false;
             RCLCPP_ERROR(
               get_logger(),
-              "cudaMemcpyAsync(D2H) failed during verification on msg #%zu: %s",
-              received_count_, cudaGetErrorString(d2h_err));
+              "No valid host pointer available for content verification on msg #%zu",
+              received_count_);
           } else {
-            cudaError_t sync_err = cudaStreamSynchronize(stream_);
-            if (sync_err != cudaSuccess) {
+            for (std::size_t i = 0; i < payload_size; ++i) {
+              if (host_ptr[i] != expected_val) {
+                content_valid = false;
+                RCLCPP_ERROR(
+                  get_logger(),
+                  "Content corruption at byte %zu: expected 0x%02x, got 0x%02x",
+                  i, expected_val, host_ptr[i]);
+                break;
+              }
+            }
+          }
+        } else {
+          const void * gpu_src_ptr = (backend == "cuda") ?
+            (read_handle.has_value() ? read_handle->get_ptr() : nullptr) :
+            gpu_dest_buffer_;
+
+          if (gpu_src_ptr == nullptr) {
+            content_valid = false;
+            RCLCPP_ERROR(
+              get_logger(),
+              "No valid GPU pointer available for content verification on msg #%zu",
+              received_count_);
+          } else {
+            std::vector<uint8_t> host_buffer(payload_size);
+            cudaError_t d2h_err = cudaMemcpyAsync(
+              host_buffer.data(), gpu_src_ptr, payload_size,
+              cudaMemcpyDeviceToHost, stream_);
+            if (d2h_err != cudaSuccess) {
               content_valid = false;
               RCLCPP_ERROR(
                 get_logger(),
-                "cudaStreamSynchronize failed during verification on msg #%zu: %s",
-                received_count_, cudaGetErrorString(sync_err));
+                "cudaMemcpyAsync(D2H) failed during verification on msg #%zu: %s",
+                received_count_, cudaGetErrorString(d2h_err));
             } else {
-              for (std::size_t i = 0; i < payload_size; ++i) {
-                if (host_buffer[i] != expected_val) {
-                  content_valid = false;
-                  RCLCPP_ERROR(
-                    get_logger(),
-                    "Content corruption at byte %zu: expected 0x%02x, got 0x%02x",
-                    i, expected_val, host_buffer[i]);
-                  break;
+              cudaError_t sync_err = cudaStreamSynchronize(stream_);
+              if (sync_err != cudaSuccess) {
+                content_valid = false;
+                RCLCPP_ERROR(
+                  get_logger(),
+                  "cudaStreamSynchronize failed during verification on msg #%zu: %s",
+                  received_count_, cudaGetErrorString(sync_err));
+              } else {
+                for (std::size_t i = 0; i < payload_size; ++i) {
+                  if (host_buffer[i] != expected_val) {
+                    content_valid = false;
+                    RCLCPP_ERROR(
+                      get_logger(),
+                      "Content corruption at byte %zu: expected 0x%02x, got 0x%02x",
+                      i, expected_val, host_buffer[i]);
+                    break;
+                  }
                 }
               }
             }
