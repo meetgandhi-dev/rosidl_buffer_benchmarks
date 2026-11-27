@@ -29,6 +29,28 @@ import tempfile
 import time
 
 
+def get_rmw_short_name():
+    rmw = os.environ.get('RMW_IMPLEMENTATION', '').strip()
+    if not rmw:
+        try:
+            import rclpy
+            rmw = rclpy.get_rmw_implementation_identifier()
+        except Exception:
+            rmw = ''
+    rmw_map = {
+        'rmw_fastrtps_cpp': 'fastrtps',
+        'rmw_zenoh_cpp': 'zenoh',
+    }
+    if rmw not in rmw_map:
+        print(
+            f"ERROR: Unsupported RMW_IMPLEMENTATION '{rmw or '<unknown>'}'. "
+            "Only rmw_fastrtps_cpp and rmw_zenoh_cpp are supported.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return rmw_map[rmw]
+
+
 def parse_resolution(res_str: str):
     """Parse 'WIDTHxHEIGHT' string into (width, height) integers."""
     try:
@@ -394,6 +416,7 @@ def main():
     )
 
     args = parser.parse_args()
+    rmw_tag = get_rmw_short_name()
     if args.max_msgs <= 0:
         args.max_msgs = 1000
     width, height = args.resolution
@@ -544,6 +567,8 @@ def main():
 
     if args.output:
         out_path = Path(args.output).resolve()
+        if not out_path.stem.endswith(f'_{rmw_tag}'):
+            out_path = out_path.with_name(f"{out_path.stem}_{rmw_tag}{out_path.suffix}")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         full_header = ['iteration'] + [h for h in header if h != 'iteration']
         with open(out_path, 'w', newline='') as f:

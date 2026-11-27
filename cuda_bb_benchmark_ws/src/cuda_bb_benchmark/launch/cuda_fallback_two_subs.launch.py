@@ -15,6 +15,7 @@
 
 import csv
 import os
+import sys
 import time
 
 from launch import LaunchDescription
@@ -349,7 +350,30 @@ def merge_and_print_csv_results(*args, **kwargs):
     print(f' Results saved to: {csv_file}\n')
 
 
+def get_rmw_short_name():
+    rmw = os.environ.get('RMW_IMPLEMENTATION', '').strip()
+    if not rmw:
+        try:
+            import rclpy
+            rmw = rclpy.get_rmw_implementation_identifier()
+        except Exception:
+            rmw = ''
+    rmw_map = {
+        'rmw_fastrtps_cpp': 'fastrtps',
+        'rmw_zenoh_cpp': 'zenoh',
+    }
+    if rmw not in rmw_map:
+        print(
+            f"ERROR: Unsupported RMW_IMPLEMENTATION '{rmw or '<unknown>'}'. "
+            "Only rmw_fastrtps_cpp and rmw_zenoh_cpp are supported.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return rmw_map[rmw]
+
+
 def generate_launch_description():
+    rmw_tag = get_rmw_short_name()
     width_arg = DeclareLaunchArgument(
         'width', default_value='1920',
         description='Image width in pixels')
@@ -366,7 +390,7 @@ def generate_launch_description():
         'warmup_msgs', default_value='10',
         description='Number of warm-up messages to ignore during setup (default: 10)')
     csv_path_arg = DeclareLaunchArgument(
-        'csv_path', default_value='/tmp/cuda_fallback_comparison.csv',
+        'csv_path', default_value=f'/tmp/cuda_fallback_comparison_{rmw_tag}.csv',
         description='Path to save output comparison CSV results')
     history_depth_arg = DeclareLaunchArgument(
         'history_depth', default_value='80',

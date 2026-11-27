@@ -76,6 +76,28 @@ BENCHMARK_TYPES = [
 ]
 
 
+def get_rmw_short_name():
+    rmw = os.environ.get('RMW_IMPLEMENTATION', '').strip()
+    if not rmw:
+        try:
+            import rclpy
+            rmw = rclpy.get_rmw_implementation_identifier()
+        except Exception:
+            rmw = ''
+    rmw_map = {
+        'rmw_fastrtps_cpp': 'fastrtps',
+        'rmw_zenoh_cpp': 'zenoh',
+    }
+    if rmw not in rmw_map:
+        print(
+            f"ERROR: Unsupported RMW_IMPLEMENTATION '{rmw or '<unknown>'}'. "
+            "Only rmw_fastrtps_cpp and rmw_zenoh_cpp are supported.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return rmw_map[rmw]
+
+
 def parse_resolution(res_str: str):
     """Parse 'WIDTHxHEIGHT' string into (width, height) integers."""
     try:
@@ -273,7 +295,7 @@ def build_pooled_row(avg_row, header, kind, cu_stats, fb_stats, is_both):
     return pooled_row
 
 
-def run_benchmark_type(cfg, width, height, rate, max_msgs, iterations):
+def run_benchmark_type(cfg, width, height, rate, max_msgs, iterations, rmw_tag):
     b_name = cfg['name']
     b_label = cfg['label']
     kind = cfg['kind']
@@ -282,7 +304,7 @@ def run_benchmark_type(cfg, width, height, rate, max_msgs, iterations):
     is_both = expect_cu and expect_fb
 
     rate_tag = f"{rate:g}".replace('.', 'p')
-    out_filename = f"cuda_{b_name}_{width}x{height}_{rate_tag}hz_{max_msgs}msgs_{iterations}iter.csv"
+    out_filename = f"cuda_{b_name}_{width}x{height}_{rate_tag}hz_{max_msgs}msgs_{iterations}iter_{rmw_tag}.csv"
     out_path = Path.cwd() / out_filename
 
     print("\n" + "#" * 90)
@@ -492,20 +514,21 @@ def main():
     )
 
     args = parser.parse_args()
+    rmw_tag = get_rmw_short_name()
     if args.max_msgs <= 0:
         args.max_msgs = 300
     width, height = args.resolution
 
     print("=" * 90)
     print(" CUDA BENCHMARK SUITE")
-    print(f" Resolution: {width}x{height} | Rate: {args.rate:.1f} Hz | Max Msgs: {args.max_msgs} | Iterations: {args.iterations}")
+    print(f" Resolution: {width}x{height} | Rate: {args.rate:.1f} Hz | Max Msgs: {args.max_msgs} | Iterations: {args.iterations} | RMW: {rmw_tag}")
     print(f" Output Directory: {Path.cwd()}")
     print("=" * 90)
 
     results = []
     for cfg in BENCHMARK_TYPES:
         res = run_benchmark_type(
-            cfg, width, height, args.rate, args.max_msgs, args.iterations)
+            cfg, width, height, args.rate, args.max_msgs, args.iterations, rmw_tag)
         results.append(res)
         time.sleep(1.0)
 

@@ -88,7 +88,7 @@ void ShmemImagePublisherNode::publish_timer_callback()
     write_publisher_summary(actual_fps, max_messages_);
     if (auto_exit_ && !shutdown_timer_) {
       shutdown_timer_ = create_wall_timer(
-        std::chrono::milliseconds(2000),
+        std::chrono::milliseconds(3000),
         [this]() {
           shutdown_timer_->cancel();
           RCLCPP_INFO(get_logger(), "Publisher auto-exit triggered.");
